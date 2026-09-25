@@ -23,6 +23,22 @@ func TestParseCmuxPanels(t *testing.T) {
 		t.Errorf("expected surface:5 when currentSurface is empty, got %s", peerNoCurrent)
 	}
 
+	// When syl is focused with ./bin/syl and currentSurface is empty or UUID, must still pick surface:5
+	sylFocusedBin := `  surface:5  terminal  "agyd"
+* surface:6  terminal  [focused]  "./bin/syl"`
+	peerSylFocused, okSyl := ParseCmuxPanels(sylFocusedBin, "12C6542C-33A2-4456-AD89-3E69EE35A8EB")
+	if !okSyl || peerSylFocused != "surface:5" {
+		t.Errorf("expected surface:5 when syl is focused with ./bin/syl and currentSurface is UUID, got %s (ok=%v)", peerSylFocused, okSyl)
+	}
+
+	// When syl is launched via bin/syl or full path
+	sylFullPath := `  surface:5  terminal  "agyd"
+* surface:6  terminal  [focused]  "/usr/local/bin/syl"`
+	peerFullPath, okFP := ParseCmuxPanels(sylFullPath, "")
+	if !okFP || peerFullPath != "surface:5" {
+		t.Errorf("expected surface:5 with full path syl, got %s", peerFullPath)
+	}
+
 	// Mixed with browser surface
 	mixedOutput := `  surface:1  browser   "Documentation"
   surface:2  terminal  "syl"

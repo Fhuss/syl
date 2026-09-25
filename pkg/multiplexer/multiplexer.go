@@ -1,6 +1,7 @@
 package multiplexer
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,6 +67,9 @@ func Send(text string, overrideTarget string) (string, error) {
 		return "✓ Test: Multiplexer disabled", nil
 	}
 
+	// Always write to system clipboard so user has an instant Cmd+V fallback
+	_ = clipboard.WriteAll(text)
+
 	target := DiscoverPeer(overrideTarget)
 
 	switch target.Type {
@@ -75,11 +79,11 @@ func Send(text string, overrideTarget string) (string, error) {
 		setCmd := exec.Command("cmux", "set-buffer", "--name", "default", "--", bracketed)
 		pasteCmd := exec.Command("cmux", "paste-buffer", "--surface", target.Surface)
 		if setCmd.Run() == nil && pasteCmd.Run() == nil {
-			return fmt.Sprintf("✓ Pasted to %s", target.Description), nil
+			return fmt.Sprintf("✓ Pasted to %s (+ copied)", target.Description), nil
 		}
 		cmd := exec.Command("cmux", "send", "--surface", target.Surface, "--", text)
 		if err := cmd.Run(); err == nil {
-			return fmt.Sprintf("✓ Sent to %s", target.Description), nil
+			return fmt.Sprintf("✓ Sent to %s (+ copied)", target.Description), nil
 		}
 		// If cmux failed, fall through to clipboard
 	case "tmux":
@@ -87,19 +91,30 @@ func Send(text string, overrideTarget string) (string, error) {
 		// -p enables bracketed paste mode in tmux so multi-line text is pasted safely
 		pasteCmd := exec.Command("tmux", "paste-buffer", "-p", "-t", target.Surface)
 		if setCmd.Run() == nil && pasteCmd.Run() == nil {
-			return fmt.Sprintf("✓ Sent to tmux pane %s", target.Surface), nil
+			return fmt.Sprintf("✓ Sent to tmux pane %s (+ copied)", target.Surface), nil
 		}
 		// If tmux failed, fall through to clipboard
-	}
-
-	if err := clipboard.WriteAll(text); err != nil {
-		return "", fmt.Errorf("copy to clipboard: %w", err)
 	}
 
 	if target.Type == "clipboard" {
 		return "✓ Copied to clipboard (Paste into chat)", nil
 	}
-	return "✓ Fallback: Copied to clipboard", nil
+	return "✓ Copied to clipboard", nil
+}
+
+// getCmuxCurrentSurface queries `cmux identify` to find the caller's actual surface_ref (e.g. "surface:6").
+func getCmuxCurrentSurface() string {
+	if out, err := exec.Command("cmux", "identify").Output(); err == nil {
+		var info struct {
+			Caller struct {
+				SurfaceRef string `json:"surface_ref"`
+			} `json:"caller"`
+		}
+		if json.Unmarshal(out, &info) == nil && info.Caller.SurfaceRef != "" {
+			return info.Caller.SurfaceRef
+		}
+	}
+	return os.Getenv("CMUX_SURFACE_ID")
 }
 
 // findCmuxPeer parses `cmux list-panels` to locate the adjacent terminal panel.
@@ -113,7 +128,7 @@ func findCmuxPeer() (string, bool) {
 		return "", false
 	}
 
-	return ParseCmuxPanels(string(out), os.Getenv("CMUX_SURFACE_ID"))
+	return ParseCmuxPanels(string(out), getCmuxCurrentSurface())
 }
 
 // ParseCmuxPanels parses output from cmux list-panels, picking the best peer terminal.
@@ -137,6 +152,7 @@ func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 		surfaceID := matches[2]
 		panelType := matches[3]
 		rest := matches[4]
+		restLower := strings.ToLower(rest)
 
 		// Only target terminal surfaces
 		if panelType != "terminal" {
@@ -144,10 +160,11 @@ func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 		}
 
 		// Don't target our own surface
-		if currentSurface != "" && surfaceID == currentSurface {
+		if currentSurface != "" && (surfaceID == currentSurface || strings.EqualFold(surfaceID, currentSurface)) {
 			continue
 		}
-		if strings.Contains(rest, `"syl`) {
+		// Skip any panel running syl (e.g. "syl", "./bin/syl", "bin/syl", "/path/to/syl")
+		if strings.Contains(restLower, "syl") {
 			continue
 		}
 
@@ -239,10 +256,10 @@ func ParseCmuxAgent(output string, currentSurface string) string {
 		if panelType != "terminal" {
 			continue
 		}
-		if currentSurface != "" && surfaceID == currentSurface {
+		if currentSurface != "" && (surfaceID == currentSurface || strings.EqualFold(surfaceID, currentSurface)) {
 			continue
 		}
-		if strings.Contains(rest, `"syl`) {
+		if strings.Contains(rest, "syl") {
 			continue
 		}
 
@@ -291,7 +308,7 @@ func DetectPeerAgent() string {
 	// 1. Check cmux
 	if _, err := exec.LookPath("cmux"); err == nil {
 		if out, err := exec.Command("cmux", "list-panels").Output(); err == nil {
-			if agent := ParseCmuxAgent(string(out), os.Getenv("CMUX_SURFACE_ID")); agent != "" {
+			if agent := ParseCmuxAgent(string(out), getCmuxCurrentSurface()); agent != "" {
 				return agent
 			}
 		}
