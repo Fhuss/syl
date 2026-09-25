@@ -1,9 +1,8 @@
 # syl
 
 > **A live reference pane for AI conversations.**
-> Named after Sylphrena (*The Stormlight Archive*), the loyal companion who adapts its shape to whatever tool you need.
 
-`syl` sits quietly beside your AI chat in a terminal multiplexer (cmux, tmux, or Zellij) and automatically extracts and maintains the useful reference material from each conversation turn: **procedures, commands, architecture decisions, and open questions** — persisted across restarts.
+`syl` sits quietly beside your AI chat in a terminal multiplexer (`cmux`, `tmux`, or split terminals) and automatically extracts and maintains the useful reference material from each conversation turn: **procedures, runnable commands, architecture decisions, and open questions** — persisted across restarts.
 
 ---
 
@@ -13,13 +12,40 @@ An assistant gives you a useful 6-step AWS deployment procedure. You ask 4 follo
 
 If a later answer corrected step 3 or changed a configuration parameter, you must remember which version in the transcript history is safe to run. Conversational scrollback causes **procedural decay**.
 
+---
+
 ## How `syl` Works
 
-1. **Passive turn observation** — Watches completed turns from AI sessions (Antigravity, Claude Code, Pi, or custom streams) via a tail-following file watcher. No _"jot this down"_ command required.
-2. **Live in-place mutation** — When a follow-up answer fixes an error or changes a configuration, `syl` patches the existing card in-place rather than adding a duplicate. Disproven steps are marked invalidated.
-3. **AI-summarized titles** — A configurable harness (`agy`, `claude`, `heuristic`, …) generates a short, meaningful topic title for each card instead of showing a raw prompt truncation.
-4. **Session persistence** — Cards, titles, pinned state, and revision history are saved to `~/.config/syl/sessions/<session-id>.json` on every change and on quit. On restart, the full reference pane is restored instantly with no replay needed.
-5. **Ergonomic terminal pane** — Split view with a scrollable turn list on the left and a Glamour-rendered markdown preview on the right. Tab to focus on just the preview.
+1. **Passive Turn Observation** — Watches completed turns from AI sessions (Antigravity, Claude Code, Pi, or custom streams) via a tail-following file watcher. No _"jot this down"_ command required.
+2. **Live In-Place Mutation & Versioning** — When a follow-up answer fixes an error or changes a configuration, `syl` patches the existing card in-place and increments the version (`v1` → `v2` → `v3`) rather than cluttering your view with duplicates. Disproven steps are marked invalidated.
+3. **Surgical Block & Step Picker (`b`)** — Scans the active card and assigns 1-key badges (`[1]`, `[2]`, `[3]`) to discrete code blocks, numbered procedure steps, and URLs for instantaneous copying or sending.
+4. **Two-Way Terminal Bridge (`s`)** — Injects card references (`[Ref: Title (vN)] `) or isolated commands directly into your adjacent chat terminal or multiplexer pane (`cmux`, `tmux`) with automatic clipboard backup.
+5. **Smart Reconciler & Companion Skill** — Recognizes `[Ref: ...]` headers and smoothly appends elaborations and patched steps without losing original context. Paired with the `syl-companion` agent skill for maximum conversational symbiosis.
+6. **Zero-Config Auto-Detection** — Automatically resolves the active session and host agent harness (`agy`, `claude`, `pi`, `heuristic`).
+7. **Session Persistence** — Cards, titles, pinned state, and revision history are saved to `~/.config/syl/sessions/<session-id>.json` on every change and restored instantly on restart.
+
+---
+
+## Key Features
+
+### 📦 Surgical Block & Step Picker (`b`)
+Press **`b`** on any card to open the actionable block modal:
+* **Code Blocks:** Tagged by language (`[BASH]`, `[SQL]`, `[DOCKER]`, `[YAML]`).
+* **Numbered Steps:** Extracts inline commands from steps (e.g. `[STEP 2]`).
+* **URLs:** Direct links (`[URL]`).
+* **Key Actions:** Press **`1`**–**`9`** or **`0`** for instant 1-key yank to clipboard, **`s`** to send to your active terminal surface, or **`o`** to open in your browser.
+
+### 🌐 Direct Browser Opener (`u`)
+Press **`u`** to immediately launch detected URLs in your default browser (`open <url>`). If multiple URLs exist, opens a quick selector.
+
+### 🔍 Interactive Live Search (`/`)
+Press **`/`** to open a real-time search bar at the bottom. Instant fuzzy filtering across card titles, commands, and content to jump to any turn in seconds.
+
+### 🔄 In-TUI Session Switcher (`S`)
+Press **`S`** to open an interactive session switcher modal listing recent conversations across Antigravity, Claude Code, and Pi. Switch active sessions on the fly without exiting `syl`.
+
+### 🚀 Two-Way Bridge (`s`)
+Press **`s`** on any card to paste a clean `[Ref: Card Title (vN)] ` reference directly into your chat terminal. Your cursor is placed right after the tag so you can type questions or report errors without accidental submits. Inside the Block Picker (`b`), pressing **`s`** sends the highlighted command.
 
 ---
 
@@ -32,7 +58,8 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
            │ turn events (user prompt + assistant response)
            ▼
 ┌──────────────────────┐
-│   Reconciler         │  LLM or heuristic: emits ADD / UPDATE / INVALIDATE mutations
+│   Reconciler         │  Emits ADD / UPDATE / INVALIDATE mutations
+│                      │  Ref matching, step preservation & elaboration appending
 └──────────┬───────────┘
            │ delta operations
            ▼
@@ -43,35 +70,52 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
            │ reactive updates
            ▼
 ┌──────────────────────┐
-│   Harness            │  Calls agy / claude / heuristic to generate succinct titles
+│   Harness            │  Auto-detects agy / claude / pi / heuristic for titles
 │                      │  Title cache → ~/.config/syl/titles.json
 └──────────┬───────────┘
            │ TitleSummarizedMsg
            ▼
 ┌──────────────────────┐
-│   TUI Engine         │  Bubbletea + Glamour markdown + Lipgloss
-│                      │  Split view | Focus view | Raw mode | Help modal
+│   TUI Engine         │  Bubble Tea + Glamour markdown + Lipgloss
+│                      │  Split view | Focus view | Block picker | Live search
 └──────────────────────┘
 ```
 
 ---
 
+## Installation & Setup
+
+### Build from source
+
+```bash
+git clone https://github.com/Fhuss/syl.git
+cd syl
+go build -o ~/.local/bin/syl ./cmd/syl
+```
+
+*(Ensure `~/.local/bin` is in your `$PATH` to run `syl` from any directory).*
+
+---
+
 ## Quickstart
 
-### Demo mode (no AI session required)
+### Run with auto-detection (Zero-Config)
+
+```bash
+# Automatically attaches to your latest active AI conversation
+syl
+```
+
+### Demo Mode (No AI session required)
 
 ```bash
 syl demo
 ```
+Replays an interactive multi-turn scenario to demonstrate live card patching and in-place versioning. Press `Space` to advance turns.
 
-Replays a simulated multi-turn scenario to demonstrate live card patching and in-place mutation. Press `Space` to advance turns.
-
-### Attach to an active session
+### CLI Options
 
 ```bash
-# Zero-config: auto-detects session and harness (agy, claude, etc.)
-syl
-
 # (Optional) Explicit harness override
 syl --harness agy        # Force Antigravity
 syl --harness claude     # Force Claude Code
@@ -83,13 +127,13 @@ syl --file /path/to/transcript.jsonl
 # Attach to a specific session by ID or prefix
 syl --session 40c1c89b
 
-# List recent sessions to choose from
+# List recent sessions across all assistants
 syl sessions
 ```
 
 ### Configuration
 
-Generate a starter config:
+Generate a starter configuration file:
 
 ```bash
 syl init-config
@@ -111,7 +155,7 @@ subagent:
 
 ## Keyboard Reference
 
-Press `?` inside `syl` to open the interactive help glossary.
+Press `?` inside `syl` anytime to open the interactive help glossary.
 
 | Key | Action |
 | :--- | :--- |
@@ -121,55 +165,36 @@ Press `?` inside `syl` to open the interactive help glossary.
 | `j` / `k` | Switch to next / previous card |
 | `←` / `→` | Switch to next / previous card |
 | `[` / `]` | Switch to previous / next card |
-| `Tab` | Toggle focus view (hide/show turns column) |
-| `b` | Surgical block & step picker (yank 1-9, run, open URL) |
-| `u` | Open detected card URL directly in browser |
+| `Tab` / `Enter` | Toggle focus view (hide/show turns column) |
+| `b` | Surgical block & step picker (yank `1`–`9`, run `s`, open URL `o`) |
+| `u` | Open card URL directly in browser |
 | `/` | Quick search & filter cards interactively |
 | `S` | Switch active conversation session without quitting |
 | `c` | Copy code snippet(s) from card to clipboard |
-| `C` | Copy full card markdown to clipboard |
+| `C` / `y` | Copy full card markdown to clipboard |
 | `r` | Toggle raw text mode (clean for mouse selection) |
 | `p` | Pin / unpin card |
-| `x` | Drop / delete card from reference pane |
-| `e` | Export all cards to `./syl-reference.md` |
+| `x` / `d` | Drop / delete card from reference pane |
+| `e` | Export all session cards to `./syl-reference.md` |
 | `h` | Toggle revision history for selected card |
-| `s` | Send card reference to peer terminal (cmux, tmux, or clipboard) |
+| `s` | Send card reference or block to peer terminal (`cmux`, `tmux`, clipboard) |
 | `?` / `F1` | Toggle help glossary modal |
 | `Space` | Advance turn (demo mode only) |
 | `q` / `Ctrl+C` | Quit (saves session snapshot to disk) |
 
 ---
 
-## Session Persistence
+## Agent Companion Skill
 
-`syl` automatically saves the full state of your reference pane to:
+Syl comes with a symbiotic agent skill (`syl-companion`) located in [`skills/syl-companion/SKILL.md`](skills/syl-companion/SKILL.md).
 
-```
-~/.config/syl/sessions/<session-id>.json
-```
-
-This includes all cards, their AI-generated titles, version history, and pinned/dropped status. On the next run against the same session, everything is restored immediately — no waiting for turn replay.
-
-AI-generated titles are additionally cached in `~/.config/syl/titles.json` to avoid redundant summarization calls across restarts.
+When installed into your assistant environment (e.g. Antigravity, Claude Code), it guides the model to:
+1. Format commands and procedures into discrete, isolated runnable blocks for Syl's Block Picker (`b`).
+2. Recognize incoming `[Ref: Card Title (vN)]` markers when you press **`s`**, immediately grounding replies in that card without friction.
+3. Preserve step numbering during revisions to enable clean in-place card updates (`v1` → `v2`).
 
 ---
 
-## CLI Reference
+## License
 
-```
-syl [command|flags]
-
-Commands:
-  demo           Interactive demo simulating live card mutation
-  sessions       List recent conversation sessions across Antigravity, Claude Code, etc.
-  init-config    Write default config to ~/.config/syl/config.yaml
-  version        Print version
-
-Flags:
-  -s, --session string    Attach to session by ID or prefix
-  -f, --file string       Path to transcript.jsonl
-  -c, --config string     Path to config file
-  -p, --provider string   LLM provider override (mock, openai, gemini, anthropic, ollama)
-      --harness string    Harness override (auto, agy, claude, pi, ollama, heuristic)
-  -h, --help              Show help
-```
+MIT
