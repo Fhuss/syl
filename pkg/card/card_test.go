@@ -137,3 +137,45 @@ func TestStoreUpdateTitle(t *testing.T) {
 	}
 	_ = c1
 }
+
+func TestStoreExportMarkdown(t *testing.T) {
+	s := NewStore()
+	s.Add(&Card{
+		ID:      "c1",
+		Type:    TypeProcedure,
+		Title:   "Setup AWS",
+		Content: "aws ec2 create-vpc",
+	})
+	s.Add(&Card{
+		ID:      "c2",
+		Type:    TypeCommand,
+		Title:   "Curl Weather",
+		Content: "curl wttr.in/Stockholm",
+		Pinned:  true,
+	})
+
+	md := s.ExportMarkdown("test-session")
+	if len(md) == 0 {
+		t.Fatalf("expected non-empty markdown export")
+	}
+	if !containsString(md, "# Syl Reference Notes") {
+		t.Errorf("expected header in export")
+	}
+	if !containsString(md, "Setup AWS") || !containsString(md, "Curl Weather") {
+		t.Errorf("expected card titles in export")
+	}
+}
+
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || (len(s) > 0 && len(substr) > 0 && hasSubstr(s, substr)))
+}
+
+func hasSubstr(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+

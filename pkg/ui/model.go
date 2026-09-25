@@ -3,7 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -82,6 +84,7 @@ type Model struct {
 	agentTool     string
 	agentPrompt   string
 	showRaw       bool
+	showHelp      bool
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -409,6 +412,126 @@ func (m *Model) actionDrop() tea.Cmd {
 	return nil
 }
 
+func (m *Model) actionExport() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) == 0 {
+		m.toast = "No reference cards to export"
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+
+	content := m.store.ExportMarkdown(m.sessionLabel)
+	targetPath := "./syl-reference.md"
+
+	err := os.WriteFile(targetPath, []byte(content), 0644)
+	if err != nil {
+		home, hErr := os.UserHomeDir()
+		if hErr == nil {
+			exportDir := filepath.Join(home, ".config", "syl", "exports")
+			_ = os.MkdirAll(exportDir, 0755)
+			label := m.sessionLabel
+			if label == "" {
+				label = "session"
+			}
+			targetPath = filepath.Join(exportDir, fmt.Sprintf("syl-reference-%s.md", label))
+			err = os.WriteFile(targetPath, []byte(content), 0644)
+		}
+	}
+
+	if err == nil {
+		_ = clipboard.WriteAll(targetPath)
+		m.toast = fmt.Sprintf("✓ Exported %d cards to %s", len(cards), targetPath)
+	} else {
+		m.toast = fmt.Sprintf("Failed to export: %v", err)
+	}
+
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+func (m *Model) renderHelpModal() string {
+	boxWidth := 74
+	if m.width > 20 && m.width < 78 {
+		boxWidth = m.width - 4
+	}
+
+	compact := m.height < 28
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPrimary).
+		Render("✨ SYL COMMAND REFERENCE & SHORTCUTS")
+
+	colKey := lipgloss.NewStyle().Bold(true).Foreground(ColorSuccess).Width(17)
+	colDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4"))
+	secHeader := lipgloss.NewStyle().Bold(true).Foreground(ColorWarning)
+
+	var b strings.Builder
+	b.WriteString(title + "\n")
+	if !compact {
+		b.WriteString("\n")
+	}
+
+	b.WriteString(secHeader.Render("Navigation & Preview") + "\n")
+	b.WriteString(colKey.Render("j / k, ← / →") + colDesc.Render("Switch active reference turn/card") + "\n")
+	b.WriteString(colKey.Render("↑ / ↓") + colDesc.Render("Scroll card preview content smoothly") + "\n")
+	b.WriteString(colKey.Render("PgUp / PgDn") + colDesc.Render("Scroll preview half-page up / down") + "\n")
+	b.WriteString(colKey.Render("g / G") + colDesc.Render("Jump to top / bottom of card preview") + "\n")
+	if !compact {
+		b.WriteString("\n")
+	}
+
+	b.WriteString(secHeader.Render("View Modes") + "\n")
+	b.WriteString(colKey.Render("Tab / Enter") + colDesc.Render("Toggle Focus View (hide/show turns column)") + "\n")
+	b.WriteString(colKey.Render("r") + colDesc.Render("Toggle Raw text mode (for clean mouse select)") + "\n")
+	b.WriteString(colKey.Render("h") + colDesc.Render("Toggle card version revision history") + "\n")
+	if !compact {
+		b.WriteString("\n")
+	}
+
+	b.WriteString(secHeader.Render("Clipboard & Actions") + "\n")
+	b.WriteString(colKey.Render("c") + colDesc.Render("Copy extracted code block(s) to clipboard") + "\n")
+	b.WriteString(colKey.Render("C / y") + colDesc.Render("Copy full card markdown content") + "\n")
+	b.WriteString(colKey.Render("p") + colDesc.Render("Pin / unpin card (protect from pruning)") + "\n")
+	b.WriteString(colKey.Render("x / d") + colDesc.Render("Drop / delete card from reference pane") + "\n")
+	b.WriteString(colKey.Render("e") + colDesc.Render("Export session reference cards to markdown") + "\n")
+	b.WriteString(colKey.Render("s") + colDesc.Render("Send card context to chat surface (cmux)") + "\n")
+	if !compact {
+		b.WriteString("\n")
+	}
+
+	b.WriteString(secHeader.Render("Mouse & General") + "\n")
+	b.WriteString(colKey.Render("Click / Wheel") + colDesc.Render("Click action pills or turns; wheel to scroll") + "\n")
+	b.WriteString(colKey.Render("? / F1") + colDesc.Render("Toggle this help reference glossary") + "\n")
+	b.WriteString(colKey.Render("q / Esc") + colDesc.Render("Close help modal / Quit syl") + "\n")
+	if !compact {
+		b.WriteString("\n")
+	}
+
+	footer := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Italic(true).
+		Render("Press [?], [Esc], [Enter], or click anywhere to close")
+	b.WriteString(footer)
+
+	paddingY := 1
+	if compact {
+		paddingY = 0
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Width(boxWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Background(lipgloss.Color("#1E222A")).
+		Padding(paddingY, 2)
+
+	modalBox := boxStyle.Render(b.String())
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalBox)
+}
+
 func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
 	return func() tea.Msg {
 		if m.harness == nil || turn == nil {
@@ -456,10 +579,14 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		return m.actionPin()
 	case "drop":
 		return m.actionDrop()
+	case "export":
+		return m.actionExport()
 	case "history":
 		m.actionToggleHistory()
 	case "send":
 		return m.actionSend()
+	case "help":
+		m.showHelp = !m.showHelp
 	case "demo_next":
 		if m.isDemo && m.demoStep < 3 {
 			return m.advanceDemo()
@@ -572,6 +699,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
+			if m.showHelp {
+				m.showHelp = false
+				return m, nil
+			}
+
 			if msg.Button == tea.MouseButtonLeft {
 				// 1. Check Action Bar clicks (Row 1)
 				if msg.Y == 1 {
@@ -632,9 +764,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.showHelp {
+			switch msg.String() {
+			case "?", "f1", "esc", "q", "enter", " ", "tab":
+				m.showHelp = false
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+
+		case "?", "f1":
+			m.showHelp = true
+			return m, nil
+
+		case "e":
+			return m, m.actionExport()
+
+		case "esc":
+			if m.viewMode == ModeDetail || m.viewMode == ModeHistory {
+				m.viewMode = ModeSplit
+				m.updateViewportSize()
+				m.updateViewportContent()
+				return m, nil
+			}
 
 		// Scrolling preview viewport content
 		case "up":
@@ -772,8 +929,13 @@ func (m *Model) renderActionBar() string {
 	addButton("📌 Pin (p)", "pin", BtnStyle)
 	addButton("🗑 Drop (x)", "drop", BtnStyle)
 
-	// 6. History (when width allows)
-	if m.width >= 95 {
+	// 6. Export (when width allows)
+	if m.width >= 90 {
+		addButton("💾 Export (e)", "export", BtnStyle)
+	}
+
+	// 7. History (when width allows)
+	if m.width >= 105 {
 		if m.viewMode == ModeHistory {
 			addButton("📜 History (h)", "history", BtnHoverStyle)
 		} else {
@@ -781,23 +943,34 @@ func (m *Model) renderActionBar() string {
 		}
 	}
 
-	// 7. Send (when width allows)
-	if m.width >= 105 {
+	// 8. Send (when width allows)
+	if m.width >= 120 {
 		addButton("🚀 Send (s)", "send", BtnStyle)
 	}
 
-	// 8. Demo next turn
+	// 9. Help modal
+	if m.showHelp {
+		addButton("❓ Help (?)", "help", BtnHoverStyle)
+	} else {
+		addButton("❓ Help (?)", "help", BtnStyle)
+	}
+
+	// 10. Demo next turn
 	if m.isDemo {
 		addButton("⏩ Next (Space)", "demo_next", BtnHoverStyle)
 	}
 
-	// 9. Quit
+	// 11. Quit
 	addButton("✕ Quit (q)", "quit", BtnDangerStyle)
 
 	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
 }
 
 func (m *Model) View() string {
+	if m.showHelp {
+		return m.renderHelpModal()
+	}
+
 	cards := m.store.List()
 
 	// 1. Header
@@ -862,15 +1035,15 @@ func (m *Model) View() string {
 	var hintText string
 	if m.width < 90 {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 Tab: Show turns • ↑/↓: Scroll • j/k: Turn • c: Copy • r: Raw"
+			hintText = "💡 Tab: Show • ↑/↓: Scroll • j/k: Turn • c: Copy • ?: Help • e: Export"
 		} else {
-			hintText = "💡 Tab: Hide turns • ↑/↓: Scroll • j/k: Turn • c: Copy • r: Raw"
+			hintText = "💡 Tab: Hide • ↑/↓: Scroll • j/k: Turn • c: Copy • ?: Help • e: Export"
 		}
 	} else {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Show turns • c: Copy • r: Raw • Hold ⌥ to select"
+			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Show turns • c: Copy • r: Raw • e: Export • ?: Help Glossary"
 		} else {
-			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Hide turns • c: Copy • r: Raw • Hold ⌥ to select"
+			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Hide turns • c: Copy • r: Raw • e: Export • ?: Help Glossary"
 		}
 	}
 	hints := FooterStyle.Render(hintText)

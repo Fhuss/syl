@@ -19,3 +19,6 @@ go.work
 .idea/
 *.swp
 *.swo
+
+# Exported reference files
+syl-reference*.md

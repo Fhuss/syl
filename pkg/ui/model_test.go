@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -283,5 +284,115 @@ func TestModelArrowScrollVsTurnNav(t *testing.T) {
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	if m.selectedIndex != 0 {
 		t.Errorf("Left arrow should switch to previous card, got %d", m.selectedIndex)
+	}
+}
+
+func TestModelHelpModalToggle(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeProcedure,
+		Title:   "AWS Setup",
+		Content: "aws configure",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+	m.updateViewportSize()
+	m.updateViewportContent()
+
+	if m.showHelp {
+		t.Fatalf("expected showHelp to be false initially")
+	}
+
+	// Press '?' to open help modal
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !m.showHelp {
+		t.Fatalf("expected showHelp to be true after pressing '?'")
+	}
+
+	// Verify modal output contains key glossary terms
+	modalView := m.View()
+	if !containsString(modalView, "SYL COMMAND REFERENCE & SHORTCUTS") {
+		t.Errorf("expected View() to render modal header, got:\n%s", modalView)
+	}
+	if !containsString(modalView, "Export session reference cards") {
+		t.Errorf("expected View() to contain export shortcut description")
+	}
+
+	// Press 'esc' to close modal
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.showHelp {
+		t.Fatalf("expected showHelp to be false after pressing Esc")
+	}
+
+	// Re-open with '?' and close with mouse click
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !m.showHelp {
+		t.Fatalf("expected showHelp to be true after second '?'")
+	}
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 10, Y: 10})
+	if m.showHelp {
+		t.Fatalf("expected showHelp to be false after mouse click")
+	}
+}
+
+func TestModelActionExport(t *testing.T) {
+	exportFile := "./syl-reference.md"
+	_ = os.Remove(exportFile)
+	defer os.Remove(exportFile)
+
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeProcedure,
+		Title:   "Setup Kubernetes Cluster",
+		Content: "```bash\nminikube start\n```",
+	})
+	store.Add(&card.Card{
+		ID:      "card-2",
+		Type:    card.TypeCommand,
+		Title:   "Inspect Pods",
+		Content: "```bash\nkubectl get pods -A\n```",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "export-test-session")
+	m.width = 120
+	m.height = 30
+
+	// Trigger export via actionExport
+	cmd := m.actionExport()
+	if cmd == nil {
+		t.Fatalf("expected actionExport to return tea.Cmd")
+	}
+
+	if !containsString(m.toast, "Exported 2 cards to ./syl-reference.md") {
+		t.Errorf("expected toast to indicate successful export, got %q", m.toast)
+	}
+
+	// Verify file was written to disk
+	data, err := os.ReadFile(exportFile)
+	if err != nil {
+		t.Fatalf("failed to read exported file: %v", err)
+	}
+
+	content := string(data)
+	if !containsString(content, "export-test-session") {
+		t.Errorf("expected exported file to contain session label")
+	}
+	if !containsString(content, "Setup Kubernetes Cluster") {
+		t.Errorf("expected exported file to contain card-1 title")
+	}
+	if !containsString(content, "Inspect Pods") {
+		t.Errorf("expected exported file to contain card-2 title")
+	}
+
+	// Test pressing 'e' key
+	_ = os.Remove(exportFile)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if _, err := os.Stat(exportFile); err != nil {
+		t.Errorf("expected 'e' key to trigger file export: %v", err)
 	}
 }

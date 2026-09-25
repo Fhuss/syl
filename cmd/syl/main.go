@@ -61,8 +61,10 @@ Keys in TUI:
   [r]          Toggle raw text mode (clean for mouse selection)
   [p]          Pin / unpin card
   [x / d]      Drop / delete card from reference pane
+  [e]          Export session cards to markdown (./syl-reference.md)
   [h]          Toggle version revision history
   [s]          Send card context to chat surface (cmux / clipboard)
+  [?]          Toggle help glossary modal
   [Space]      Advance turn (in demo mode)
   [q, Ctrl+C]  Quit
 `, version)

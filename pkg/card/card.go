@@ -1,6 +1,8 @@
 package card
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -209,3 +211,60 @@ func (s *Store) List() []*Card {
 
 	return append(pinned, unpinned...)
 }
+
+// ExportMarkdown formats all active and pinned cards into a clean Markdown document.
+func (s *Store) ExportMarkdown(sessionLabel string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var sb strings.Builder
+	sb.WriteString("# Syl Reference Notes\n\n")
+	if sessionLabel != "" {
+		sb.WriteString(fmt.Sprintf("> **Session**: `%s` | **Exported**: %s\n\n", sessionLabel, time.Now().Format("2006-01-02 15:04:05")))
+	} else {
+		sb.WriteString(fmt.Sprintf("> **Exported**: %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+	}
+
+	pinned := make([]*Card, 0)
+	unpinned := make([]*Card, 0)
+	for _, id := range s.order {
+		if c, ok := s.cards[id]; ok {
+			if c.Pinned {
+				pinned = append(pinned, c)
+			} else {
+				unpinned = append(unpinned, c)
+			}
+		}
+	}
+	cards := append(pinned, unpinned...)
+
+	if len(cards) == 0 {
+		sb.WriteString("*No reference cards saved in this session.*\n")
+		return sb.String()
+	}
+
+	for _, c := range cards {
+		pinBadge := ""
+		if c.Pinned {
+			pinBadge = " 📌"
+		}
+		statusBadge := ""
+		if c.Status == StatusInvalidated {
+			statusBadge = " [INVALIDATED]"
+		}
+		sb.WriteString(fmt.Sprintf("## %d. %s (v%d) [%s]%s%s\n\n", c.Number, c.Title, c.Version, c.Type, pinBadge, statusBadge))
+		sb.WriteString(c.Content)
+		sb.WriteString("\n\n")
+		if len(c.History) > 1 {
+			sb.WriteString("<details><summary>Revision History</summary>\n\n")
+			for _, h := range c.History {
+				sb.WriteString(fmt.Sprintf("- **v%d** (%s): %s\n", h.Version, h.UpdatedAt.Format("15:04:05"), h.Reason))
+			}
+			sb.WriteString("\n</details>\n\n")
+		}
+		sb.WriteString("---\n\n")
+	}
+
+	return sb.String()
+}
+
