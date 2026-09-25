@@ -65,9 +65,10 @@ type Model struct {
 	renderer      *glamour.TermRenderer
 	viewport      viewport.Model
 	buttons       []Button
+	sessionLabel  string
 }
 
-func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, isDemo bool) *Model {
+func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, isDemo bool, sessionLabel string) *Model {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(80),
@@ -86,6 +87,7 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 		renderer:      r,
 		viewport:      vp,
 		buttons:       make([]Button, 0),
+		sessionLabel:  sessionLabel,
 	}
 
 	return m
@@ -482,7 +484,12 @@ func (m *Model) View() string {
 		statusBadge = StatusLive.Render()
 	}
 
-	headerLeft := HeaderStyle.Render("syl") + " " + statusBadge
+	sessionBadge := ""
+	if m.sessionLabel != "" {
+		sessionBadge = lipgloss.NewStyle().Foreground(ColorMuted).Render("["+m.sessionLabel+"]") + " "
+	}
+
+	headerLeft := HeaderStyle.Render("syl") + " " + sessionBadge + statusBadge
 	var headerRight string
 	if m.toast != "" {
 		headerRight = ToastStyle.Render(m.toast)

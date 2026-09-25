@@ -18,34 +18,16 @@ import (
 
 const version = "0.1.0"
 
-func findLatestAntigravityTranscript() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	if d < time.Minute {
+		return "just now"
+	} else if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	} else if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
-
-	pattern := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
-	matches, err := filepath.Glob(pattern)
-	if err != nil || len(matches) == 0 {
-		return "", fmt.Errorf("no active Antigravity session transcript found")
-	}
-
-	var latestFile string
-	var latestTime time.Time
-
-	for _, m := range matches {
-		info, err := os.Stat(m)
-		if err == nil && info.ModTime().After(latestTime) {
-			latestTime = info.ModTime()
-			latestFile = m
-		}
-	}
-
-	if latestFile == "" {
-		return "", fmt.Errorf("no valid transcript file found")
-	}
-
-	return latestFile, nil
+	return t.Format("Jan 02 15:04")
 }
 
 func main() {
@@ -57,14 +39,16 @@ Usage:
 
 Commands:
   demo               Run an interactive simulation demonstrating live card mutation
+  sessions           List active and recent conversation sessions to choose from
   init-config        Generate a default configuration file in ~/.config/syl/config.yaml
   version            Print version information
 
 Flags:
-  -f, --file string  Path to transcript.jsonl (auto-detected if omitted)
-  -c, --config string Path to config file (default ~/.config/syl/config.yaml)
+  -s, --session string Attach to a specific conversation session by ID or prefix
+  -f, --file string    Path to transcript.jsonl (auto-detected if omitted)
+  -c, --config string  Path to config file (default ~/.config/syl/config.yaml)
   -p, --provider string LLM provider override (mock, openai, gemini)
-  -h, --help         Show this help message
+  -h, --help           Show this help message
 
 Keys in TUI:
   [j/k, ↑/↓]   Navigate reference cards
@@ -79,12 +63,15 @@ Keys in TUI:
 	}
 
 	var (
+		sessionFlag  string
 		fileFlag     string
 		configFlag   string
 		providerFlag string
 		showVersion  bool
 	)
 
+	flag.StringVar(&sessionFlag, "session", "", "Session ID or prefix to watch")
+	flag.StringVar(&sessionFlag, "s", "", "Session ID or prefix to watch (shorthand)")
 	flag.StringVar(&fileFlag, "file", "", "Path to transcript.jsonl file")
 	flag.StringVar(&fileFlag, "f", "", "Path to transcript.jsonl file (shorthand)")
 	flag.StringVar(&configFlag, "config", "", "Path to config file")
@@ -107,6 +94,24 @@ Keys in TUI:
 
 	if subcommand == "version" {
 		fmt.Printf("syl version %s\n", version)
+		os.Exit(0)
+	}
+
+	if subcommand == "sessions" {
+		sessions, err := watcher.ListSessions(15)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing sessions: %v\n", err)
+			os.Exit(1)
+		}
+		if len(sessions) == 0 {
+			fmt.Println("No active or past sessions found.")
+			os.Exit(0)
+		}
+		fmt.Printf("Recent Antigravity Conversation Sessions:\n\n")
+		for _, s := range sessions {
+			fmt.Printf("  [%s]  %-52s  (%s)\n", s.ShortID, s.Title, formatTimeAgo(s.ModTime))
+		}
+		fmt.Printf("\nRun 'syl -s <id>' to watch a specific session.\n")
 		os.Exit(0)
 	}
 
@@ -157,21 +162,33 @@ Keys in TUI:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	sessionLabel := "demo"
 	if !isDemo {
 		transcriptPath := fileFlag
+		if transcriptPath == "" && sessionFlag != "" {
+			session, err := watcher.FindSessionByID(sessionFlag)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
+				os.Exit(1)
+			}
+			transcriptPath = session.Path
+			sessionLabel = session.ShortID
+		}
+
 		if transcriptPath == "" {
 			transcriptPath = cfg.Watcher.TranscriptPath
 		}
+
 		if transcriptPath == "" {
-			autoPath, err := findLatestAntigravityTranscript()
-			if err == nil {
-				transcriptPath = autoPath
-				fmt.Printf("Auto-discovered active transcript: %s\n", transcriptPath)
+			sessions, err := watcher.ListSessions(1)
+			if err == nil && len(sessions) > 0 {
+				transcriptPath = sessions[0].Path
+				sessionLabel = sessions[0].ShortID
 			}
 		}
 
 		if transcriptPath != "" {
-			turnCh = make(chan *watcher.Turn, 10)
+			turnCh = make(chan *watcher.Turn, 100)
 			fw := watcher.NewFileWatcher(transcriptPath)
 			go func() {
 				if err := fw.Watch(ctx, turnCh); err != nil {
@@ -181,7 +198,7 @@ Keys in TUI:
 		}
 	}
 
-	model := ui.NewModel(store, rec, turnCh, isDemo)
+	model := ui.NewModel(store, rec, turnCh, isDemo, sessionLabel)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {
