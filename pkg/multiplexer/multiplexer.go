@@ -70,19 +70,22 @@ func Send(text string, overrideTarget string) (string, error) {
 
 	switch target.Type {
 	case "cmux":
-		setCmd := exec.Command("cmux", "set-buffer", text)
+		// Wrap in bracketed paste mode so newlines do not prematurely submit prompts in readline/AI CLIs
+		bracketed := "\x1b[200~" + text + "\x1b[201~"
+		setCmd := exec.Command("cmux", "set-buffer", "--name", "default", "--", bracketed)
 		pasteCmd := exec.Command("cmux", "paste-buffer", "--surface", target.Surface)
 		if setCmd.Run() == nil && pasteCmd.Run() == nil {
 			return fmt.Sprintf("✓ Pasted to %s", target.Description), nil
 		}
-		cmd := exec.Command("cmux", "send", "--surface", target.Surface, text)
+		cmd := exec.Command("cmux", "send", "--surface", target.Surface, "--", text)
 		if err := cmd.Run(); err == nil {
 			return fmt.Sprintf("✓ Sent to %s", target.Description), nil
 		}
 		// If cmux failed, fall through to clipboard
 	case "tmux":
 		setCmd := exec.Command("tmux", "set-buffer", "--", text)
-		pasteCmd := exec.Command("tmux", "paste-buffer", "-t", target.Surface)
+		// -p enables bracketed paste mode in tmux so multi-line text is pasted safely
+		pasteCmd := exec.Command("tmux", "paste-buffer", "-p", "-t", target.Surface)
 		if setCmd.Run() == nil && pasteCmd.Run() == nil {
 			return fmt.Sprintf("✓ Sent to tmux pane %s", target.Surface), nil
 		}
