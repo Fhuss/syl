@@ -118,3 +118,100 @@ func TestModelTitleSummarized(t *testing.T) {
 		t.Errorf("expected updated title 'Succinct AI Topic', got %q", cards[0].Title)
 	}
 }
+
+func TestModelToggleFocus(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeProcedure,
+		Title:   "Step 1: Setup AWS Infrastructure",
+		Content: "aws ec2 create-vpc\naws ec2 create-subnet",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 120
+	m.height = 30
+	m.updateViewportSize()
+
+	if m.viewMode != ModeSplit {
+		t.Fatalf("expected initial viewMode ModeSplit, got %v", m.viewMode)
+	}
+	expectedSplitWrap := 120 - m.getLeftColWidth() - 4
+	if m.viewport.Width != expectedSplitWrap {
+		t.Errorf("expected split viewport width %d, got %d", expectedSplitWrap, m.viewport.Width)
+	}
+
+	// Press Tab to toggle focus
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.viewMode != ModeDetail {
+		t.Fatalf("expected viewMode ModeDetail after Tab, got %v", m.viewMode)
+	}
+	expectedDetailWrap := 120 - 4
+	if m.viewport.Width != expectedDetailWrap {
+		t.Errorf("expected detail viewport width %d, got %d", expectedDetailWrap, m.viewport.Width)
+	}
+
+	// Verify focus view banner contains FOCUS VIEW
+	viewOutput := m.View()
+	if !containsString(viewOutput, "FOCUS VIEW") {
+		t.Errorf("expected View() output to contain 'FOCUS VIEW', got:\n%s", viewOutput)
+	}
+
+	// Press Tab again to return to split
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.viewMode != ModeSplit {
+		t.Fatalf("expected viewMode ModeSplit after second Tab, got %v", m.viewMode)
+	}
+	if m.viewport.Width != expectedSplitWrap {
+		t.Errorf("expected restored split viewport width %d, got %d", expectedSplitWrap, m.viewport.Width)
+	}
+}
+
+func TestModelToggleRaw(t *testing.T) {
+	store := card.NewStore()
+	rawMarkdown := "### Title\n\n```bash\necho hello\n```"
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeCommand,
+		Title:   "Echo Command",
+		Content: rawMarkdown,
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+	m.updateViewportSize()
+	m.updateViewportContent()
+
+	if m.showRaw {
+		t.Fatalf("expected showRaw to be false initially")
+	}
+
+	// Press 'r' to toggle raw
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !m.showRaw {
+		t.Fatalf("expected showRaw to be true after pressing 'r'")
+	}
+	if m.viewport.View() == "" {
+		t.Errorf("expected non-empty viewport view in raw mode")
+	}
+
+	// Press 'r' again to return to rendered
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if m.showRaw {
+		t.Fatalf("expected showRaw to be false after second 'r'")
+	}
+}
+
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || (len(s) > 0 && len(substr) > 0 && hasSubstr(s, substr)))
+}
+
+func hasSubstr(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

@@ -80,6 +80,7 @@ type Model struct {
 	isAgentBusy   bool
 	agentTool     string
 	agentPrompt   string
+	showRaw       bool
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -200,6 +201,44 @@ func (m *Model) advanceDemo() tea.Cmd {
 	})
 }
 
+func (m *Model) updateViewportSize() {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+
+	var wrapWidth int
+	var vpHeight int
+
+	if m.viewMode == ModeDetail {
+		wrapWidth = m.width - 4
+		if wrapWidth < 25 {
+			wrapWidth = 25
+		}
+		vpHeight = m.height - 6 // accounting for focus banner and hints
+		if vpHeight < 5 {
+			vpHeight = 5
+		}
+	} else {
+		leftColWidth := m.getLeftColWidth()
+		wrapWidth = m.width - leftColWidth - 4
+		if wrapWidth < 25 {
+			wrapWidth = 25
+		}
+		vpHeight = m.height - 5
+		if vpHeight < 5 {
+			vpHeight = 5
+		}
+	}
+
+	m.renderer, _ = glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(wrapWidth),
+	)
+
+	m.viewport.Width = wrapWidth
+	m.viewport.Height = vpHeight
+}
+
 func (m *Model) updateViewportContent() {
 	cards := m.store.List()
 	if len(cards) == 0 || m.selectedIndex >= len(cards) {
@@ -217,6 +256,9 @@ func (m *Model) updateViewportContent() {
 			b.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Render(entry))
 		}
 		m.viewport.SetContent(b.String())
+	} else if m.showRaw {
+		// Display raw unformatted markdown text - no ANSI colors, no margins, ideal for mouse selection
+		m.viewport.SetContent(selected.Content)
 	} else {
 		rendered, err := m.renderer.Render(selected.Content)
 		if err != nil {
@@ -227,16 +269,70 @@ func (m *Model) updateViewportContent() {
 	m.viewport.GotoTop()
 }
 
+func (m *Model) actionToggleFocus() {
+	if m.viewMode == ModeDetail {
+		m.viewMode = ModeSplit
+		m.toast = "Split view: turns list shown"
+	} else {
+		m.viewMode = ModeDetail
+		m.toast = "Focus view: turns list hidden (Tab to restore)"
+	}
+	m.updateViewportSize()
+	m.updateViewportContent()
+}
+
+func (m *Model) actionToggleRaw() {
+	m.showRaw = !m.showRaw
+	if m.showRaw {
+		m.toast = "Raw text mode (clean for mouse selection)"
+	} else {
+		m.toast = "Rendered markdown mode"
+	}
+	m.updateViewportContent()
+}
+
 func (m *Model) actionCopy() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
 		snippet := c.Content
-		if matches := codeFenceRegex.FindStringSubmatch(c.Content); len(matches) > 1 {
-			snippet = strings.TrimSpace(matches[1])
+		allMatches := codeFenceRegex.FindAllStringSubmatch(c.Content, -1)
+		if len(allMatches) > 0 {
+			var blocks []string
+			for _, match := range allMatches {
+				if len(match) > 1 {
+					code := strings.TrimSpace(match[1])
+					if code != "" {
+						blocks = append(blocks, code)
+					}
+				}
+			}
+			if len(blocks) > 0 {
+				snippet = strings.Join(blocks, "\n\n")
+			}
 		}
 		if err := clipboard.WriteAll(snippet); err == nil {
-			m.toast = "✓ Copied to clipboard!"
+			if len(allMatches) > 0 {
+				m.toast = fmt.Sprintf("✓ Copied %d code block(s) to clipboard!", len(allMatches))
+			} else {
+				m.toast = "✓ Copied card text to clipboard!"
+			}
+		} else {
+			m.toast = "Failed to copy to clipboard"
+		}
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+	return nil
+}
+
+func (m *Model) actionCopyAll() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		c := cards[m.selectedIndex]
+		if err := clipboard.WriteAll(c.Content); err == nil {
+			m.toast = "✓ Copied full card content to clipboard!"
 		} else {
 			m.toast = "Failed to copy to clipboard"
 		}
@@ -270,6 +366,7 @@ func (m *Model) actionToggleHistory() {
 	} else {
 		m.viewMode = ModeHistory
 	}
+	m.updateViewportSize()
 	m.updateViewportContent()
 }
 
@@ -345,8 +442,14 @@ func (m *Model) getLeftColWidth() int {
 
 func (m *Model) handleButtonAction(action string) tea.Cmd {
 	switch action {
+	case "toggle_focus":
+		m.actionToggleFocus()
+	case "toggle_raw":
+		m.actionToggleRaw()
 	case "copy":
 		return m.actionCopy()
+	case "copy_all":
+		return m.actionCopyAll()
 	case "pin":
 		return m.actionPin()
 	case "drop":
@@ -373,23 +476,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		leftColWidth := m.getLeftColWidth()
-		wrapWidth := msg.Width - leftColWidth - 4
-		if wrapWidth < 25 {
-			wrapWidth = 25
-		}
-		m.renderer, _ = glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
-			glamour.WithWordWrap(wrapWidth),
-		)
-
-		vpHeight := msg.Height - 5
-		if vpHeight < 5 {
-			vpHeight = 5
-		}
-		m.viewport.Width = wrapWidth
-		m.viewport.Height = vpHeight
+		m.updateViewportSize()
 		m.updateViewportContent()
 		return m, nil
 
@@ -458,7 +545,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
 	case tea.MouseMsg:
-		leftColWidth := m.getLeftColWidth()
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonLeft {
 				// 1. Check Action Bar clicks (Row 1)
@@ -471,42 +557,50 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				// 2. Check Card List clicks (Row >= 2, X <= leftColWidth)
-				if msg.Y >= 2 && msg.X <= leftColWidth {
-					cardIdx := msg.Y - 2
-					cards := m.store.List()
-					if cardIdx >= 0 && cardIdx < len(cards) {
-						if m.selectedIndex == cardIdx {
-							// Toggle view mode on repeat click
-							if m.viewMode == ModeDetail {
-								m.viewMode = ModeSplit
+				// 2. In Split mode: Check Card List clicks (Row >= 2, X <= leftColWidth)
+				if m.viewMode != ModeDetail {
+					leftColWidth := m.getLeftColWidth()
+					if msg.Y >= 2 && msg.X <= leftColWidth {
+						cardIdx := msg.Y - 2
+						cards := m.store.List()
+						if cardIdx >= 0 && cardIdx < len(cards) {
+							if m.selectedIndex == cardIdx {
+								m.actionToggleFocus()
 							} else {
-								m.viewMode = ModeDetail
+								m.selectedIndex = cardIdx
+								m.updateViewportContent()
 							}
-						} else {
-							m.selectedIndex = cardIdx
 						}
-						m.updateViewportContent()
 					}
 				}
 			} else if msg.Button == tea.MouseButtonWheelUp {
-				if msg.X <= leftColWidth {
-					if m.selectedIndex > 0 {
-						m.selectedIndex--
-						m.updateViewportContent()
-					}
-				} else {
+				if m.viewMode == ModeDetail {
 					m.viewport.LineUp(3)
+				} else {
+					leftColWidth := m.getLeftColWidth()
+					if msg.X <= leftColWidth {
+						if m.selectedIndex > 0 {
+							m.selectedIndex--
+							m.updateViewportContent()
+						}
+					} else {
+						m.viewport.LineUp(3)
+					}
 				}
 			} else if msg.Button == tea.MouseButtonWheelDown {
-				if msg.X <= leftColWidth {
-					cards := m.store.List()
-					if m.selectedIndex < len(cards)-1 {
-						m.selectedIndex++
-						m.updateViewportContent()
-					}
-				} else {
+				if m.viewMode == ModeDetail {
 					m.viewport.LineDown(3)
+				} else {
+					leftColWidth := m.getLeftColWidth()
+					if msg.X <= leftColWidth {
+						cards := m.store.List()
+						if m.selectedIndex < len(cards)-1 {
+							m.selectedIndex++
+							m.updateViewportContent()
+						}
+					} else {
+						m.viewport.LineDown(3)
+					}
 				}
 			}
 		}
@@ -529,21 +623,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 			}
 
-		case "enter":
-			if m.viewMode == ModeDetail {
-				m.viewMode = ModeSplit
-			} else {
-				m.viewMode = ModeDetail
-			}
+		case "tab", "enter", "f", "t":
+			m.actionToggleFocus()
+
+		case "r":
+			m.actionToggleRaw()
+
+		case "c":
+			return m, m.actionCopy()
+
+		case "C", "y":
+			return m, m.actionCopyAll()
 
 		case "h":
 			m.actionToggleHistory()
 
 		case "p":
 			return m, m.actionPin()
-
-		case "c", "y":
-			return m, m.actionCopy()
 
 		case "s":
 			return m, m.actionSend()
@@ -598,18 +694,52 @@ func (m *Model) renderActionBar() string {
 		currX += width + 1
 	}
 
+	// 1. Focus / Split toggle
+	if m.viewMode == ModeDetail {
+		addButton("☰ Show Turns (Tab)", "toggle_focus", BtnHoverStyle)
+	} else {
+		addButton("👁 Hide Turns (Tab)", "toggle_focus", BtnStyle)
+	}
+
+	// 2. Copy Code
 	addButton("📋 Copy (c)", "copy", BtnStyle)
+
+	// 3. Copy All (when width allows)
+	if m.width >= 85 {
+		addButton("📄 All (C)", "copy_all", BtnStyle)
+	}
+
+	// 4. Raw text toggle
+	if m.showRaw {
+		addButton("🎨 Rendered (r)", "toggle_raw", BtnHoverStyle)
+	} else {
+		addButton("📝 Raw (r)", "toggle_raw", BtnStyle)
+	}
+
+	// 5. Pin & Drop
 	addButton("📌 Pin (p)", "pin", BtnStyle)
 	addButton("🗑 Drop (x)", "drop", BtnStyle)
-	if m.viewMode == ModeHistory {
-		addButton("📜 History (h)", "history", BtnHoverStyle)
-	} else {
-		addButton("📜 History (h)", "history", BtnStyle)
+
+	// 6. History (when width allows)
+	if m.width >= 95 {
+		if m.viewMode == ModeHistory {
+			addButton("📜 History (h)", "history", BtnHoverStyle)
+		} else {
+			addButton("📜 History (h)", "history", BtnStyle)
+		}
 	}
-	addButton("🚀 Send (s)", "send", BtnStyle)
+
+	// 7. Send (when width allows)
+	if m.width >= 105 {
+		addButton("🚀 Send (s)", "send", BtnStyle)
+	}
+
+	// 8. Demo next turn
 	if m.isDemo {
-		addButton("⏩ Next Turn (Space)", "demo_next", BtnHoverStyle)
+		addButton("⏩ Next (Space)", "demo_next", BtnHoverStyle)
 	}
+
+	// 9. Quit
 	addButton("✕ Quit (q)", "quit", BtnDangerStyle)
 
 	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
@@ -670,14 +800,89 @@ func (m *Model) View() string {
 			Padding(2, 2).
 			Foreground(ColorMuted).
 			Render(emptyMsg)
+	} else if m.viewMode == ModeDetail {
+		body = m.renderDetailFocus(cards)
 	} else {
 		body = m.renderCardsAndDetail(cards)
 	}
 
 	// 4. Footer
-	hints := FooterStyle.Render("💡 Click any card or action button • Scroll with mouse wheel or trackpad")
+	var hintText string
+	if m.width < 90 {
+		if m.viewMode == ModeDetail {
+			hintText = "💡 Tab: Show turns • j/k: Switch • c: Copy • r: Raw • Hold ⌥ to select"
+		} else {
+			hintText = "💡 Tab: Hide turns • j/k: Nav • c: Copy • r: Raw • Hold ⌥ to select"
+		}
+	} else {
+		if m.viewMode == ModeDetail {
+			hintText = "💡 Tab: Show turns • j/k: Switch turn • c: Copy code • C: Copy all • r: Raw • Hold Option/Alt to select text"
+		} else {
+			hintText = "💡 Tab: Hide turns • j/k: Navigate • c: Copy code • C: Copy all • r: Raw • Hold Option/Alt to select text"
+		}
+	}
+	hints := FooterStyle.Render(hintText)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, actionBar, body, hints)
+}
+
+func (m *Model) renderDetailFocus(cards []*card.Card) string {
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		return ""
+	}
+	selected := cards[m.selectedIndex]
+
+	var badge lipgloss.Style
+	switch selected.Type {
+	case card.TypeProcedure:
+		badge = BadgeProc
+	case card.TypeCommand:
+		badge = BadgeCmd
+	case card.TypeDecision:
+		badge = BadgeDec
+	default:
+		badge = BadgeInfo
+	}
+	if selected.Status == card.StatusInvalidated {
+		badge = BadgeInvalid
+	}
+
+	numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%d", selected.Number))
+	verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", selected.Version))
+	pinIcon := ""
+	if selected.Pinned {
+		pinIcon = "📌 "
+	}
+
+	modeIndicator := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPrimary).
+		Render("FOCUS VIEW")
+
+	turnNavHint := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render(fmt.Sprintf("[%d/%d]  [j/k: navigate • Tab: show turns]", m.selectedIndex+1, len(cards)))
+
+	titleStr := lipgloss.NewStyle().Bold(true).Render(selected.Title)
+
+	bannerLeft := fmt.Sprintf("%s  %s %s %s%s %s", modeIndicator, numStr, badge.Render(), pinIcon, titleStr, verStr)
+	gap := m.width - lipgloss.Width(bannerLeft) - lipgloss.Width(turnNavHint) - 4
+	if gap < 2 {
+		gap = 2
+	}
+	bannerLine := bannerLeft + strings.Repeat(" ", gap) + turnNavHint
+
+	banner := lipgloss.NewStyle().
+		Background(ColorHighlight).
+		Width(m.width - 2).
+		Padding(0, 1).
+		Render(bannerLine)
+
+	vpContent := lipgloss.NewStyle().
+		Padding(0, 1).
+		Render(m.viewport.View())
+
+	return lipgloss.JoinVertical(lipgloss.Left, banner, vpContent)
 }
 
 func (m *Model) renderCardsAndDetail(cards []*card.Card) string {

@@ -54,8 +54,10 @@ Flags:
 
 Keys in TUI:
   [j/k, ↑/↓]   Navigate reference cards
-  [Enter]      Toggle full-width detail / split view
-  [c / y]      Copy card code snippet to system clipboard
+  [Tab/Enter]  Toggle focus view (hide/show turns column)
+  [c]          Copy card code snippet(s) to system clipboard
+  [C / y]      Copy full card markdown content to clipboard
+  [r]          Toggle raw text mode (clean for mouse selection)
   [p]          Pin / unpin card
   [x / d]      Drop / delete card from reference pane
   [h]          Toggle version revision history
