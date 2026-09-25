@@ -85,7 +85,7 @@ Keys in TUI:
 	flag.StringVar(&fileFlag, "f", "", "Path to transcript.jsonl file (shorthand)")
 	flag.StringVar(&configFlag, "config", "", "Path to config file")
 	flag.StringVar(&configFlag, "c", "", "Path to config file (shorthand)")
-	flag.StringVar(&providerFlag, "provider", "", "LLM provider override (mock, openai, gemini)")
+	flag.StringVar(&providerFlag, "provider", "", "LLM provider override (mock, openai, gemini, anthropic, ollama)")
 	flag.StringVar(&providerFlag, "p", "", "LLM provider override (shorthand)")
 	flag.StringVar(&harnessFlag, "harness", "", "Subagent harness override (auto, agy, claude, pi, ollama, heuristic)")
 	flag.BoolVar(&showVersion, "version", false, "Print version")
@@ -158,8 +158,9 @@ Keys in TUI:
 	var rec reconciler.Reconciler
 	if isDemo {
 		rec = reconciler.NewMockReconciler()
-	} else if cfg.LLM.APIKey != "" && cfg.LLM.Provider != "mock" {
+	} else if (cfg.LLM.APIKey != "" || cfg.LLM.Provider == "ollama") && cfg.LLM.Provider != "mock" {
 		rec = reconciler.NewLLMReconciler(reconciler.LLMConfig{
+			Provider: cfg.LLM.Provider,
 			Endpoint: cfg.LLM.Endpoint,
 			APIKey:   cfg.LLM.APIKey,
 			Model:    cfg.LLM.Model,

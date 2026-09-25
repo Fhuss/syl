@@ -33,16 +33,32 @@ type WatcherConfig struct {
 
 func DefaultConfig() *Config {
 	apiKey := os.Getenv("GEMINI_API_KEY")
+	provider := "gemini"
+	endpoint := "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+	model := "gemini-2.0-flash"
+
 	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
+		if openaiKey := os.Getenv("OPENAI_API_KEY"); openaiKey != "" {
+			apiKey = openaiKey
+			provider = "openai"
+			endpoint = "https://api.openai.com/v1/chat/completions"
+			model = "gpt-4o-mini"
+		} else if anthropicKey := os.Getenv("ANTHROPIC_API_KEY"); anthropicKey != "" {
+			apiKey = anthropicKey
+			provider = "anthropic"
+			endpoint = "https://api.anthropic.com/v1/messages"
+			model = "claude-3-5-haiku-latest"
+		} else {
+			provider = "mock"
+		}
 	}
 
 	return &Config{
 		LLM: LLMConfig{
-			Provider: "mock",
-			Endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			Provider: provider,
+			Endpoint: endpoint,
 			APIKey:   apiKey,
-			Model:    "gemini-2.5-flash",
+			Model:    model,
 		},
 		Watcher: WatcherConfig{
 			TranscriptPath: "",
