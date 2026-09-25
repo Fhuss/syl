@@ -74,9 +74,7 @@ func Send(text string, overrideTarget string) (string, error) {
 
 	switch target.Type {
 	case "cmux":
-		// Wrap in bracketed paste mode so newlines do not prematurely submit prompts in readline/AI CLIs
-		bracketed := "\x1b[200~" + text + "\x1b[201~"
-		setCmd := exec.Command("cmux", "set-buffer", "--name", "default", "--", bracketed)
+		setCmd := exec.Command("cmux", "set-buffer", "--name", "default", "--", text)
 		pasteCmd := exec.Command("cmux", "paste-buffer", "--surface", target.Surface)
 		if setCmd.Run() == nil && pasteCmd.Run() == nil {
 			return fmt.Sprintf("✓ Pasted to %s (+ copied)", target.Description), nil

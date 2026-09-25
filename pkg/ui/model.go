@@ -434,7 +434,7 @@ func (m *Model) actionSend() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
-		textToSend := fmt.Sprintf("[Ref: %s (v%d)]\n%s", c.Title, c.Version, c.Content)
+		textToSend := fmt.Sprintf("[Ref: %s (v%d)] ", c.Title, c.Version)
 		toast, err := multiplexer.Send(textToSend, "")
 		if err != nil {
 			m.toast = fmt.Sprintf("Error: %v", err)
