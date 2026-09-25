@@ -88,6 +88,7 @@ type Model struct {
 	showHelp          bool
 	sessionFilePath   string
 	lastTurnProcessed int
+	cardListOffset    int
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -372,12 +373,20 @@ func (m *Model) actionCopyAll() tea.Cmd {
 func (m *Model) actionPin() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
-		pinned := m.store.TogglePin(cards[m.selectedIndex].ID)
+		selectedID := cards[m.selectedIndex].ID
+		pinned := m.store.TogglePin(selectedID)
 		m.saveSessionState()
 		if pinned {
 			m.toast = "📌 Pinned card"
 		} else {
 			m.toast = "Unpinned card"
+		}
+		newCards := m.store.List()
+		for idx, c := range newCards {
+			if c.ID == selectedID {
+				m.selectedIndex = idx
+				break
+			}
 		}
 		m.updateViewportContent()
 		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
@@ -900,7 +909,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.viewMode != ModeDetail {
 					leftColWidth := m.getLeftColWidth()
 					if msg.Y >= 2 && msg.X <= leftColWidth {
-						cardIdx := msg.Y - 2
+						cardIdx := m.cardListOffset + (msg.Y - 2)
 						cards := m.store.List()
 						if cardIdx >= 0 && cardIdx < len(cards) {
 							if m.selectedIndex == cardIdx {
@@ -1298,8 +1307,47 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 		innerWidth = 16
 	}
 
-	leftLines := make([]string, 0, len(cards)+1)
-	for i, c := range cards {
+	availHeight := m.viewport.Height
+	if availHeight <= 0 {
+		availHeight = m.height - 3
+	}
+	if availHeight <= 0 {
+		availHeight = 20
+	}
+
+	cardSlots := availHeight
+	if m.isAgentBusy {
+		cardSlots--
+	}
+	if cardSlots < 1 {
+		cardSlots = 1
+	}
+
+	if m.selectedIndex < m.cardListOffset {
+		m.cardListOffset = m.selectedIndex
+	} else if m.selectedIndex >= m.cardListOffset+cardSlots {
+		m.cardListOffset = m.selectedIndex - cardSlots + 1
+	}
+	if m.cardListOffset < 0 {
+		m.cardListOffset = 0
+	}
+	maxOffset := len(cards) - cardSlots
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.cardListOffset > maxOffset {
+		m.cardListOffset = maxOffset
+	}
+
+	endIdx := m.cardListOffset + cardSlots
+	if endIdx > len(cards) {
+		endIdx = len(cards)
+	}
+
+	visibleCards := cards[m.cardListOffset:endIdx]
+	leftLines := make([]string, 0, len(visibleCards)+1)
+	for idx, c := range visibleCards {
+		i := m.cardListOffset + idx
 		badgeStr := cardTypeBadge(c)
 
 		prefix := "  "

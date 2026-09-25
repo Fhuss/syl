@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -470,4 +472,74 @@ func TestModelSessionPersistence(t *testing.T) {
 		t.Errorf("expected View() to immediately render restored title, got:\n%s", view)
 	}
 	_ = c1
+}
+
+func TestModelPinPreservesSelection(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Card 1"})
+	store.Add(&card.Card{ID: "c2", Title: "Card 2"})
+	store.Add(&card.Card{ID: "c3", Title: "Card 3"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 120
+	m.height = 30
+	m.updateViewportSize()
+
+	// Select Card 3 (index 2)
+	m.selectedIndex = 2
+	cards := store.List()
+	if cards[m.selectedIndex].ID != "c3" {
+		t.Fatalf("expected selected card to be c3, got %s", cards[m.selectedIndex].ID)
+	}
+
+	// Pin Card 3
+	_ = m.actionPin()
+
+	// Pinned card c3 is moved to index 0 by store.List(), and selectedIndex must update to 0 so the user is still on c3!
+	cardsAfterPin := store.List()
+	if cardsAfterPin[0].ID != "c3" {
+		t.Fatalf("expected c3 to be at index 0 after pin, got %s", cardsAfterPin[0].ID)
+	}
+	if m.selectedIndex != 0 {
+		t.Errorf("expected selectedIndex to update to 0 to track c3, got %d", m.selectedIndex)
+	}
+	if cardsAfterPin[m.selectedIndex].ID != "c3" {
+		t.Errorf("expected selection to remain on c3, got %s", cardsAfterPin[m.selectedIndex].ID)
+	}
+}
+
+func TestModelCardListWindowing(t *testing.T) {
+	store := card.NewStore()
+	for i := 1; i <= 30; i++ {
+		store.Add(&card.Card{
+			ID:      fmt.Sprintf("card-%d", i),
+			Title:   fmt.Sprintf("Step %d Task", i),
+			Content: fmt.Sprintf("content for card %d", i),
+		})
+	}
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 120
+	m.height = 15 // Terminal height is 15 lines (viewport height ~ 10)
+	m.updateViewportSize()
+
+	// Navigate to card index 25 (Step 26)
+	m.selectedIndex = 25
+	viewOutput := m.renderCardsAndDetail(store.List())
+
+	// Windowing must advance cardListOffset
+	if m.cardListOffset == 0 {
+		t.Errorf("expected cardListOffset > 0 when selectedIndex is 25, got %d", m.cardListOffset)
+	}
+
+	// View output must contain Step 26
+	if !containsString(viewOutput, "Step 26 Task") {
+		t.Errorf("expected windowed view output to contain selected 'Step 26 Task', got:\n%s", viewOutput)
+	}
+
+	// View output lines must not exceed viewport height
+	lines := strings.Split(viewOutput, "\n")
+	if len(lines) > m.height {
+		t.Errorf("rendered cards and detail has %d lines, exceeding terminal height %d", len(lines), m.height)
+	}
 }
