@@ -1,7 +1,10 @@
 package card
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -266,5 +269,95 @@ func (s *Store) ExportMarkdown(sessionLabel string) string {
 	}
 
 	return sb.String()
+}
+
+// SessionSnapshot represents a complete serialized dump of the session cards and progress.
+type SessionSnapshot struct {
+	SessionID         string    `json:"session_id"`
+	LastTurnProcessed int       `json:"last_turn_processed"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Cards             []*Card   `json:"cards"`
+}
+
+// SessionFilePath returns the default path ~/.config/syl/sessions/<sessionID>.json, or respects SYL_CONFIG_DIR if set.
+func SessionFilePath(sessionID string) (string, error) {
+	var dir string
+	if custom := os.Getenv("SYL_CONFIG_DIR"); custom != "" {
+		dir = filepath.Join(custom, "sessions")
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		dir = filepath.Join(home, ".config", "syl", "sessions")
+	}
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s.json", sessionID)), nil
+}
+
+// SaveSnapshot serializes the store and its cards to disk.
+func (s *Store) SaveSnapshot(filePath string, sessionID string, lastTurnProcessed int) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	cards := make([]*Card, 0, len(s.order))
+	for _, id := range s.order {
+		if c, ok := s.cards[id]; ok {
+			cards = append(cards, c)
+		}
+	}
+
+	snap := SessionSnapshot{
+		SessionID:         sessionID,
+		LastTurnProcessed: lastTurnProcessed,
+		UpdatedAt:         time.Now(),
+		Cards:             cards,
+	}
+
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(filePath)
+	_ = os.MkdirAll(dir, 0755)
+
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// LoadSnapshot loads cards and state from a session snapshot file.
+func (s *Store) LoadSnapshot(filePath string) (*SessionSnapshot, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	var snap SessionSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cards = make(map[string]*Card)
+	s.order = make([]string, 0, len(snap.Cards))
+	maxNumber := 0
+
+	for _, c := range snap.Cards {
+		s.cards[c.ID] = c
+		s.order = append(s.order, c.ID)
+		if c.Number > maxNumber {
+			maxNumber = c.Number
+		}
+	}
+	s.counter = maxNumber
+
+	return &snap, nil
 }
 

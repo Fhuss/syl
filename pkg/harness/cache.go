@@ -72,6 +72,22 @@ func (tc *TitleCache) save() {
 	_ = os.WriteFile(tc.filePath, data, 0644)
 }
 
+// IsDefinitiveTitle checks whether a title is a meaningful topic summary
+// rather than an empty string or a truncated prompt fallback ending in "...".
+func IsDefinitiveTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	if strings.HasSuffix(t, "...") {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(t), "turn #") {
+		return false
+	}
+	return true
+}
+
 func (tc *TitleCache) Get(sessionID string, turnID int) (string, bool) {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
@@ -89,6 +105,10 @@ func (tc *TitleCache) Set(sessionID string, turnID int, title string) {
 	defer tc.mu.Unlock()
 
 	key := makeKey(sessionID, turnID)
+	// Do not overwrite an existing definitive title with a truncated prompt fallback
+	if existing, ok := tc.titles[key]; ok && IsDefinitiveTitle(existing) && !IsDefinitiveTitle(title) {
+		return
+	}
 	tc.titles[key] = title
 	tc.save()
 }
@@ -110,7 +130,12 @@ func (tc *TitleCache) SetByPrompt(prompt, title string) {
 	defer tc.mu.Unlock()
 
 	h := hashPrompt(prompt)
-	tc.titles["p:"+h] = title
+	key := "p:" + h
+	// Do not overwrite an existing definitive title with a truncated prompt fallback
+	if existing, ok := tc.titles[key]; ok && IsDefinitiveTitle(existing) && !IsDefinitiveTitle(title) {
+		return
+	}
+	tc.titles[key] = title
 	tc.save()
 }
 

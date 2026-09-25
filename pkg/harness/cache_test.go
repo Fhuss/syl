@@ -36,4 +36,33 @@ func TestTitleCache(t *testing.T) {
 	if !ok2 || got2 != "Stockholm Weather Query" {
 		t.Fatalf("expected reloaded title 'Stockholm Weather Query', got %q", got2)
 	}
+
+	// Try downgrading with a truncated fallback ending in "..."
+	cache2.Set("session-1", 10, "how is the weather...")
+	got3, _ := cache2.Get("session-1", 10)
+	if got3 != "Stockholm Weather Query" {
+		t.Errorf("expected definitive title not to be downgraded by truncated fallback, got %q", got3)
+	}
+}
+
+func TestIsDefinitiveTitle(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"Stockholm Weather", true},
+		{"How Go Handles Packages", true},
+		{"did you create the...", false},
+		{"summarize the...", false},
+		{"Turn #3", false},
+		{"", false},
+		{"   ", false},
+	}
+
+	for _, tc := range cases {
+		got := IsDefinitiveTitle(tc.input)
+		if got != tc.want {
+			t.Errorf("IsDefinitiveTitle(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
 }

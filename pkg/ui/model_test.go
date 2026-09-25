@@ -9,6 +9,15 @@ import (
 	"github.com/Fhuss/syl/pkg/reconciler"
 )
 
+func TestMain(m *testing.M) {
+	tmpDir, err := os.MkdirTemp("", "syl-test-*")
+	if err == nil {
+		os.Setenv("SYL_CONFIG_DIR", tmpDir)
+		defer os.RemoveAll(tmpDir)
+	}
+	os.Exit(m.Run())
+}
+
 func TestModelDropAndPin(t *testing.T) {
 	store := card.NewStore()
 	c1 := store.Add(&card.Card{
@@ -399,4 +408,66 @@ func TestModelActionExport(t *testing.T) {
 	if _, err := os.Stat(exportFile); err != nil {
 		t.Errorf("expected 'e' key to trigger file export: %v", err)
 	}
+}
+
+func TestModelSessionPersistence(t *testing.T) {
+	sessionLabel := "test-persisted-session-123"
+	snapPath, err := card.SessionFilePath(sessionLabel)
+	if err != nil {
+		t.Fatalf("failed to get session file path: %v", err)
+	}
+	_ = os.Remove(snapPath)
+	defer os.Remove(snapPath)
+
+	// Step 1: Create initial session with cards and saved state
+	initialStore := card.NewStore()
+	c1 := initialStore.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeProcedure,
+		Title:   "Original Title",
+		Content: "step 1",
+	})
+	initialStore.UpdateTitle("card-1", "AI Persisted Short Title")
+	initialStore.TogglePin("card-1")
+
+	m1 := NewModel(initialStore, reconciler.NewMockReconciler(), nil, nil, nil, false, sessionLabel)
+	m1.width = 100
+	m1.height = 30
+	m1.lastTurnProcessed = 8
+
+	// Simulate user quitting (saves state to disk)
+	m1.saveSessionState()
+
+	if _, err := os.Stat(snapPath); err != nil {
+		t.Fatalf("expected session file to be written to %s: %v", snapPath, err)
+	}
+
+	// Step 2: Simulate starting syl on a brand new process/run
+	freshStore := card.NewStore()
+	m2 := NewModel(freshStore, reconciler.NewMockReconciler(), nil, nil, nil, false, sessionLabel)
+	m2.width = 120
+	m2.height = 30
+	m2.updateViewportSize()
+
+	// Verify cards and titles were automatically restored from disk on startup
+	restoredCards := m2.store.List()
+	if len(restoredCards) != 1 {
+		t.Fatalf("expected 1 card restored, got %d", len(restoredCards))
+	}
+	if restoredCards[0].Title != "AI Persisted Short Title" {
+		t.Errorf("expected restored title 'AI Persisted Short Title', got %q", restoredCards[0].Title)
+	}
+	if !restoredCards[0].Pinned {
+		t.Errorf("expected restored card to remain pinned")
+	}
+	if m2.lastTurnProcessed != 8 {
+		t.Errorf("expected lastTurnProcessed to be 8, got %d", m2.lastTurnProcessed)
+	}
+
+	// Verify view immediately renders the persisted title without waiting for turns
+	view := m2.View()
+	if !containsString(view, "AI Persisted") {
+		t.Errorf("expected View() to immediately render restored title, got:\n%s", view)
+	}
+	_ = c1
 }

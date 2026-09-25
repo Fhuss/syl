@@ -84,8 +84,10 @@ type Model struct {
 	isAgentBusy   bool
 	agentTool     string
 	agentPrompt   string
-	showRaw       bool
-	showHelp      bool
+	showRaw           bool
+	showHelp          bool
+	sessionFilePath   string
+	lastTurnProcessed int
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -100,21 +102,40 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(ColorWarning)
 
+	var lastTurn int
+	var sessionFilePath string
+	if !isDemo && sessionLabel != "" {
+		if path, err := card.SessionFilePath(sessionLabel); err == nil {
+			sessionFilePath = path
+			if len(store.List()) == 0 {
+				if snap, err := store.LoadSnapshot(path); err == nil {
+					lastTurn = snap.LastTurnProcessed
+				}
+			}
+		}
+	}
+
 	m := &Model{
-		store:         store,
-		reconciler:    rec,
-		harness:       h,
-		turnCh:        turnCh,
-		activityCh:    activityCh,
-		selectedIndex: 0,
-		viewMode:      ModeSplit,
-		isDemo:        isDemo,
-		demoStep:      0,
-		renderer:      r,
-		viewport:      vp,
-		buttons:       make([]Button, 0),
-		sessionLabel:  sessionLabel,
-		spinner:       sp,
+		store:             store,
+		reconciler:        rec,
+		harness:           h,
+		turnCh:            turnCh,
+		activityCh:        activityCh,
+		selectedIndex:     0,
+		viewMode:          ModeSplit,
+		isDemo:            isDemo,
+		demoStep:          0,
+		renderer:          r,
+		viewport:          vp,
+		buttons:           make([]Button, 0),
+		sessionLabel:      sessionLabel,
+		sessionFilePath:   sessionFilePath,
+		lastTurnProcessed: lastTurn,
+		spinner:           sp,
+	}
+
+	if len(store.List()) > 0 {
+		m.updateViewportContent()
 	}
 
 	return m
@@ -352,6 +373,7 @@ func (m *Model) actionPin() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		pinned := m.store.TogglePin(cards[m.selectedIndex].ID)
+		m.saveSessionState()
 		if pinned {
 			m.toast = "📌 Pinned card"
 		} else {
@@ -398,6 +420,7 @@ func (m *Model) actionDrop() tea.Cmd {
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
 		m.store.Remove(c.ID)
+		m.saveSessionState()
 		m.toast = fmt.Sprintf("✓ Dropped card #%d", c.Number)
 		newCards := m.store.List()
 		if len(newCards) == 0 {
@@ -411,6 +434,13 @@ func (m *Model) actionDrop() tea.Cmd {
 		})
 	}
 	return nil
+}
+
+func (m *Model) saveSessionState() {
+	if m.isDemo || m.sessionFilePath == "" {
+		return
+	}
+	_ = m.store.SaveSnapshot(m.sessionFilePath, m.sessionLabel, m.lastTurnProcessed)
 }
 
 func (m *Model) actionExport() tea.Cmd {
@@ -691,6 +721,7 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		}
 		m.toast = "Demo finished! All turns demonstrated."
 	case "quit":
+		m.saveSessionState()
 		return tea.Quit
 	}
 	return nil
@@ -720,11 +751,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TurnReceivedMsg:
 		m.isAgentBusy = false
+		if msg.Turn != nil && msg.Turn.ID <= m.lastTurnProcessed {
+			// Turn was already processed in a saved snapshot.
+			// Upgrade card title if a definitive title is now in cache.
+			if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
+				for _, c := range m.store.List() {
+					if len(c.History) > 0 && strings.Contains(c.History[0].Reason, fmt.Sprintf("Turn %d", msg.Turn.ID)) {
+						if !harness.IsDefinitiveTitle(c.Title) {
+							m.store.UpdateTitle(c.ID, cached)
+							m.updateViewportContent()
+							m.saveSessionState()
+						}
+					}
+				}
+			}
+			return m, m.listenForTurns()
+		}
+
 		m.reconciling = true
 		return m, tea.Batch(m.applyReconcile(msg.Turn), m.listenForTurns())
 
 	case MutationsAppliedMsg:
 		m.reconciling = false
+		if msg.Turn != nil && msg.Turn.ID > m.lastTurnProcessed {
+			m.lastTurnProcessed = msg.Turn.ID
+		}
+
 		for _, mut := range msg.Mutations {
 			switch mut.Op {
 			case reconciler.OpAdd:
@@ -745,24 +797,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 				m.toast = fmt.Sprintf("Added: %s", mut.Title)
 
-				// 2. Queue AI summarization if not in cache (live turn or un-cached catch-up)
+				// 2. Queue AI summarization if not definitive in cache
 				if msg.Turn != nil && m.harness != nil {
-					hasCache := false
-					if _, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok {
-						hasCache = true
-					} else if _, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok {
-						hasCache = true
+					hasDefinitive := false
+					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
+						hasDefinitive = true
+					} else if cached, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok && harness.IsDefinitiveTitle(cached) {
+						hasDefinitive = true
 					}
 
-					if !msg.Turn.IsCatchUp || !hasCache {
+					if !hasDefinitive {
 						cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
 					}
 				}
 			case reconciler.OpUpdate:
 				m.store.Update(mut.CardID, mut.Content, mut.Reason)
 				m.toast = fmt.Sprintf("Updated: %s", mut.Reason)
-				if msg.Turn != nil && !msg.Turn.IsCatchUp && m.harness != nil {
-					cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+				if msg.Turn != nil && m.harness != nil {
+					hasDefinitive := false
+					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
+						hasDefinitive = true
+					} else if cached, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok && harness.IsDefinitiveTitle(cached) {
+						hasDefinitive = true
+					}
+
+					if !hasDefinitive {
+						cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+					}
 				}
 			case reconciler.OpInvalidate:
 				m.store.Invalidate(mut.CardID, mut.Reason)
@@ -770,6 +831,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.updateViewportContent()
+		m.saveSessionState()
 		cmds = append(cmds, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
 		}))
@@ -778,6 +840,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TitleSummarizedMsg:
 		if m.store.UpdateTitle(msg.CardID, msg.Title) {
 			m.updateViewportContent()
+			m.saveSessionState()
 		}
 		if msg.Turn != nil {
 			harness.GetTitleCache().Set(m.sessionLabel, msg.Turn.ID, msg.Title)
@@ -874,6 +937,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.saveSessionState()
 			return m, tea.Quit
 
 		case "?", "f1":

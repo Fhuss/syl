@@ -1,6 +1,7 @@
 package card
 
 import (
+	"os"
 	"testing"
 )
 
@@ -177,5 +178,74 @@ func hasSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestStoreSnapshotPersistence(t *testing.T) {
+	tmpFile := "./test-session-snap.json"
+	_ = os.Remove(tmpFile)
+	defer os.Remove(tmpFile)
+
+	s1 := NewStore()
+	c1 := s1.Add(&Card{
+		ID:      "card-1",
+		Type:    TypeProcedure,
+		Title:   "Original Title",
+		Content: "step 1: deploy",
+	})
+	s1.UpdateTitle("card-1", "Succinct AI Title")
+	s1.TogglePin("card-1")
+
+	s1.Add(&Card{
+		ID:      "card-2",
+		Type:    TypeCommand,
+		Title:   "Docker Run",
+		Content: "docker run -d nginx",
+	})
+
+	// Save snapshot
+	err := s1.SaveSnapshot(tmpFile, "session-123", 15)
+	if err != nil {
+		t.Fatalf("failed to save snapshot: %v", err)
+	}
+
+	// Load into a fresh store
+	s2 := NewStore()
+	snap, err := s2.LoadSnapshot(tmpFile)
+	if err != nil {
+		t.Fatalf("failed to load snapshot: %v", err)
+	}
+
+	if snap.SessionID != "session-123" {
+		t.Errorf("expected session ID 'session-123', got %s", snap.SessionID)
+	}
+	if snap.LastTurnProcessed != 15 {
+		t.Errorf("expected last turn 15, got %d", snap.LastTurnProcessed)
+	}
+
+	cards := s2.List()
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 cards in restored store, got %d", len(cards))
+	}
+
+	// Verify card 1 attributes
+	if cards[0].ID != "card-1" {
+		t.Errorf("expected first card to be card-1, got %s", cards[0].ID)
+	}
+	if cards[0].Title != "Succinct AI Title" {
+		t.Errorf("expected restored title 'Succinct AI Title', got %q", cards[0].Title)
+	}
+	if !cards[0].Pinned {
+		t.Errorf("expected card-1 to retain pinned state")
+	}
+
+	// Verify counter numbering continues properly
+	c3 := s2.Add(&Card{
+		ID:    "card-3",
+		Title: "Third Card",
+	})
+	if c3.Number != 3 {
+		t.Errorf("expected card 3 number to be 3, got %d", c3.Number)
+	}
+	_ = c1
 }
 
