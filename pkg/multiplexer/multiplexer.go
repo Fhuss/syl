@@ -62,6 +62,10 @@ func DiscoverPeer(overrideTarget string) Target {
 
 // Send injects text into the peer terminal or copies to system clipboard.
 func Send(text string, overrideTarget string) (string, error) {
+	if os.Getenv("SYL_MULTIPLEXER_DISABLED") == "1" {
+		return "✓ Test: Multiplexer disabled", nil
+	}
+
 	target := DiscoverPeer(overrideTarget)
 
 	switch target.Type {

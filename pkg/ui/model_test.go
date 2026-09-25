@@ -12,6 +12,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	os.Setenv("SYL_MULTIPLEXER_DISABLED", "1")
 	tmpDir, err := os.MkdirTemp("", "syl-test-*")
 	if err == nil {
 		os.Setenv("SYL_CONFIG_DIR", tmpDir)
