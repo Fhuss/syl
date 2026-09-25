@@ -87,9 +87,13 @@ func extractSessionTitle(path string) string {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			break
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}

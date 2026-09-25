@@ -69,16 +69,22 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 		}
 	}
 
+	var partialLine string
+
 	processAvailableLines := func() {
 		for {
-			line, err := reader.ReadString('\n')
+			chunk, err := reader.ReadString('\n')
 			if err != nil {
-				if err != io.EOF {
-					// read error
+				if err == io.EOF && len(chunk) > 0 {
+					partialLine += chunk
 				}
 				break
 			}
-			line = strings.TrimSpace(line)
+
+			fullLine := partialLine + chunk
+			partialLine = ""
+
+			line := strings.TrimSpace(fullLine)
 			if line == "" {
 				continue
 			}
