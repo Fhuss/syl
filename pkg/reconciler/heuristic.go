@@ -14,6 +14,22 @@ import (
 var (
 	fenceRegex = regexp.MustCompile("(?s)```([a-zA-Z0-9_-]+)?\n(.*?)\n```")
 	stepRegex  = regexp.MustCompile(`(?m)^\s*(\d+\.|\*|-)\s+(.*)`)
+
+	toolWordRegexes = func() map[string]*regexp.Regexp {
+		tools := []string{
+			"aws", "docker", "kubectl", "curl", "git", "go", "golang", "npm", "pnpm", "yarn",
+			"cargo", "python", "terraform", "redis", "postgres", "cmux", "tmux",
+		}
+		m := make(map[string]*regexp.Regexp, len(tools))
+		for _, t := range tools {
+			m[t] = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(t) + `\b`)
+		}
+		return m
+	}()
+
+	correctionRegex   = regexp.MustCompile(`(?i)\b(error|failed|fails|failing|fix|fixed|instead|instead of|switch to|switch from|still getting|still failing)\b|\bchange\s+(the\s+)?(region|port|flag|subnet|image|version|config|cluster|user|password|name|directory|path|env)\b`)
+	continuationRegex = regexp.MustCompile(`(?i)\b((this|that|the|previous)\s+(step|procedure|command|script|card|snippet|config)|step\s+\d+|same\s+(command|script|step))\b`)
+	invalidationRegex = regexp.MustCompile(`(?i)\b(don't use|do not use|deprecated|disproven|obsolete|drop this|invalid)\b`)
 )
 
 // HeuristicReconciler extracts and mutates reference cards without requiring an external LLM API.
@@ -140,37 +156,25 @@ func findMatchingCard(cards []*card.Card, turn *watcher.Turn, newCommands string
 	userLower := strings.ToLower(turn.User)
 	newCmdLower := strings.ToLower(newCommands)
 
-	// 1. Check for CLI tool domain overlap (e.g. AWS, Docker, Git, Curl, etc.)
-	knownTools := []string{
-		"aws", "docker", "kubectl", "curl", "git", "go", "npm", "pnpm", "yarn",
-		"cargo", "python", "terraform", "redis", "postgres", "cmux", "tmux",
-	}
+	hasCorrection := correctionRegex.MatchString(userLower)
+	hasContinuation := continuationRegex.MatchString(userLower)
+	hasInvalidation := invalidationRegex.MatchString(userLower)
 
-	for _, tool := range knownTools {
-		hasInNew := strings.Contains(newCmdLower, tool) || strings.Contains(userLower, tool)
-		if hasInNew {
-			for i := len(cards) - 1; i >= 0; i-- {
-				c := cards[i]
-				cLower := strings.ToLower(c.Content + " " + c.Title)
-				if strings.Contains(cLower, tool) && c.Status != card.StatusInvalidated {
-					return c
+	// 1. If user indicates a correction, adjustment, continuation, or invalidation:
+	if hasCorrection || hasContinuation || hasInvalidation {
+		// A. First look for domain tool match using strict word boundaries
+		for _, re := range toolWordRegexes {
+			if re.MatchString(newCmdLower) || re.MatchString(userLower) {
+				for i := len(cards) - 1; i >= 0; i-- {
+					c := cards[i]
+					if c.Status != card.StatusInvalidated && (re.MatchString(c.Content) || re.MatchString(c.Title)) {
+						return c
+					}
 				}
 			}
 		}
-	}
 
-	// 2. Check for explicit correction/follow-up signals targeting the most recent active card
-	isCorrection := strings.Contains(userLower, "error") ||
-		strings.Contains(userLower, "failed") ||
-		strings.Contains(userLower, "fix") ||
-		strings.Contains(userLower, "instead") ||
-		strings.Contains(userLower, "change") ||
-		strings.Contains(userLower, "update") ||
-		strings.Contains(userLower, "switch") ||
-		strings.Contains(userLower, "replace") ||
-		strings.Contains(userLower, "still")
-
-	if isCorrection {
+		// B. If no specific tool matched, target the most recent active card
 		for i := len(cards) - 1; i >= 0; i-- {
 			if cards[i].Status != card.StatusInvalidated {
 				return cards[i]
@@ -178,5 +182,36 @@ func findMatchingCard(cards []*card.Card, turn *watcher.Turn, newCommands string
 		}
 	}
 
+	// 2. Check for explicit command similarity (e.g. updating the same CLI invocation)
+	newFirstCmd := extractFirstCommandLine(newCommands)
+	if newFirstCmd != "" && len(newFirstCmd) >= 8 {
+		for i := len(cards) - 1; i >= 0; i-- {
+			c := cards[i]
+			if c.Status == card.StatusInvalidated {
+				continue
+			}
+			cardFirstCmd := extractFirstCommandLine(c.Content)
+			if cardFirstCmd != "" && (strings.HasPrefix(newFirstCmd, cardFirstCmd) || strings.HasPrefix(cardFirstCmd, newFirstCmd)) {
+				return c
+			}
+		}
+	}
+
 	return nil
+}
+
+func extractFirstCommandLine(content string) string {
+	matches := fenceRegex.FindStringSubmatch(content)
+	body := content
+	if len(matches) > 2 {
+		body = matches[2]
+	}
+	lines := strings.Split(body, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "//") {
+			return strings.ToLower(l)
+		}
+	}
+	return ""
 }

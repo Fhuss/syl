@@ -78,3 +78,88 @@ func TestHeuristicReconciler(t *testing.T) {
 	}
 }
 
+func TestHeuristicNoSubstringFalsePositive(t *testing.T) {
+	h := NewHeuristicReconciler()
+	ctx := context.Background()
+
+	// Existing Card 1 is about Go build commands
+	existingCards := []*card.Card{
+		{
+			ID:      "card-1",
+			Title:   "Build Syl Binary",
+			Content: "```bash\ngo build -o bin/syl ./cmd/syl\n```",
+		},
+	}
+
+	// Turn 2 contains the word "algorithm" (which has substring "go", but is NOT the tool "go")
+	turnAlgorithm := &watcher.Turn{
+		ID:        2,
+		User:      "What algorithm should we use for sorting?",
+		Assistant: "Here is the quicksort procedure:\n1. Choose a pivot\n2. Partition elements",
+	}
+
+	muts, err := h.Reconcile(ctx, existingCards, turnAlgorithm)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(muts) != 1 {
+		t.Fatalf("expected 1 mutation, got %d", len(muts))
+	}
+	// Must be OpAdd (new card), NEVER OpUpdate (which would overwrite card-1)
+	if muts[0].Op != OpAdd {
+		t.Errorf("expected OpAdd for unrelated 'algorithm' prompt, but got %v (falsely matched substring 'go')", muts[0].Op)
+	}
+
+	// Turn 3 contains "flaws" (which has substring "aws")
+	awsCard := []*card.Card{
+		{
+			ID:      "card-aws",
+			Title:   "Deploy to AWS ECS",
+			Content: "```bash\naws ecs create-cluster --cluster-name prod\n```",
+		},
+	}
+	turnFlaws := &watcher.Turn{
+		ID:        3,
+		User:      "Explain the flaws of this architectural approach",
+		Assistant: "The main trade-offs are:\n1. Increased latency\n2. Eventual consistency challenges",
+	}
+	mutsAWS, err := h.Reconcile(ctx, awsCard, turnFlaws)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mutsAWS) != 1 || mutsAWS[0].Op != OpAdd {
+		t.Errorf("expected OpAdd for 'flaws', got %v (falsely matched substring 'aws')", mutsAWS)
+	}
+}
+
+func TestHeuristicIndependentTurnsInSameLanguage(t *testing.T) {
+	h := NewHeuristicReconciler()
+	ctx := context.Background()
+
+	// Existing Card 1 is a Go HTTP server
+	card1 := &card.Card{
+		ID:      "card-1",
+		Title:   "Go HTTP Server",
+		Content: "```go\nhttp.ListenAndServe(\":8080\", nil)\n```",
+	}
+
+	// Turn 2 is an independent question in Go (JSON unmarshaling), NOT a correction
+	turn2 := &watcher.Turn{
+		ID:        2,
+		User:      "How do I unmarshal JSON into a struct in Go?",
+		Assistant: "Use the json.Unmarshal function:\n```go\nerr := json.Unmarshal(data, &user)\n```",
+	}
+
+	muts, err := h.Reconcile(ctx, []*card.Card{card1}, turn2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(muts) != 1 {
+		t.Fatalf("expected 1 mutation, got %d", len(muts))
+	}
+	// Must be OpAdd — the HTTP server reference card must NOT be destroyed!
+	if muts[0].Op != OpAdd {
+		t.Errorf("expected OpAdd for independent Go question, got %v (overwrote existing card)", muts[0].Op)
+	}
+}
+
