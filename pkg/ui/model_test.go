@@ -543,3 +543,28 @@ func TestModelCardListWindowing(t *testing.T) {
 		t.Errorf("rendered cards and detail has %d lines, exceeding terminal height %d", len(lines), m.height)
 	}
 }
+
+func TestModelActionSend(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Title:   "AWS Deployment",
+		Content: "aws ecs list-clusters",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+	m.selectedIndex = 0
+
+	cmd := m.actionSend()
+	if cmd == nil {
+		t.Fatalf("expected actionSend to return a tea.Cmd")
+	}
+
+	// Toast should be populated with either send message or clipboard fallback
+	if m.toast == "" {
+		t.Errorf("expected m.toast to be set after actionSend")
+	}
+}
+

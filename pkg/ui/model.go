@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/harness"
+	"github.com/Fhuss/syl/pkg/multiplexer"
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/watcher"
 )
@@ -411,11 +411,11 @@ func (m *Model) actionSend() tea.Cmd {
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
 		textToSend := fmt.Sprintf("[Ref: %s (v%d)]\n%s", c.Title, c.Version, c.Content)
-		if err := exec.Command("cmux", "send", textToSend).Run(); err == nil {
-			m.toast = "✓ Sent card to active chat surface!"
+		toast, err := multiplexer.Send(textToSend, "")
+		if err != nil {
+			m.toast = fmt.Sprintf("Error: %v", err)
 		} else {
-			_ = clipboard.WriteAll(textToSend)
-			m.toast = "✓ Copied context to clipboard!"
+			m.toast = toast
 		}
 		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
