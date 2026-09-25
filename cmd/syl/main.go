@@ -117,9 +117,13 @@ Keys in TUI:
 			fmt.Println("No active or past sessions found.")
 			os.Exit(0)
 		}
-		fmt.Printf("Recent Antigravity Conversation Sessions:\n\n")
+		fmt.Printf("Recent Conversation Sessions:\n\n")
 		for _, s := range sessions {
-			fmt.Printf("  [%s]  %-52s  (%s)\n", s.ShortID, s.Title, formatTimeAgo(s.ModTime))
+			agentTag := fmt.Sprintf("[%s]", s.Agent)
+			if s.Agent == "" {
+				agentTag = "[agy]"
+			}
+			fmt.Printf("  %-14s  [%s]  %-48s  (%s)\n", agentTag, s.ShortID, s.Title, formatTimeAgo(s.ModTime))
 		}
 		fmt.Printf("\nRun 'syl -s <id>' to watch a specific session.\n")
 		os.Exit(0)

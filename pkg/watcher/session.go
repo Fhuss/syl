@@ -12,61 +12,160 @@ import (
 )
 
 type SessionInfo struct {
-	ID        string    `json:"id"`
-	ShortID   string    `json:"short_id"`
-	Title     string    `json:"title"`
-	Path      string    `json:"path"`
-	ModTime   time.Time `json:"mod_time"`
+	ID      string    `json:"id"`
+	ShortID string    `json:"short_id"`
+	Title   string    `json:"title"`
+	Path    string    `json:"path"`
+	ModTime time.Time `json:"mod_time"`
+	Agent   string    `json:"agent"` // "antigravity", "claude", "pi", "custom", "local", "file"
 }
 
-// ListSessions discovers all Antigravity conversation sessions sorted by most recent.
+type discoverySource struct {
+	agent       string
+	patterns    []string
+	idExtractor func(path string) (id, shortID string)
+}
+
+// ListSessions discovers all conversation sessions from Antigravity, Claude Code,
+// Pi Agent, and local project environments, sorted by most recent.
 func ListSessions(limit int) ([]SessionInfo, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 
-	pattern := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
+	sources := []discoverySource{
+		{
+			agent: "antigravity",
+			patterns: []string{
+				filepath.Join(home, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl"),
+			},
+			idExtractor: func(path string) (string, string) {
+				parts := strings.Split(path, string(filepath.Separator))
+				for i, p := range parts {
+					if p == "brain" && i+1 < len(parts) {
+						id := parts[i+1]
+						shortID := id
+						if len(shortID) > 8 {
+							shortID = shortID[:8]
+						}
+						return id, shortID
+					}
+				}
+				return "unknown", "unknown"
+			},
+		},
+		{
+			agent: "claude",
+			patterns: []string{
+				filepath.Join(home, ".claude", "projects", "*", "*.jsonl"),
+				filepath.Join(home, ".claude", "sessions", "*.jsonl"),
+				filepath.Join(home, ".config", "claude", "projects", "*", "*.jsonl"),
+			},
+			idExtractor: func(path string) (string, string) {
+				base := filepath.Base(path)
+				id := strings.TrimSuffix(base, filepath.Ext(base))
+				shortID := id
+				if len(shortID) > 8 {
+					shortID = shortID[:8]
+				}
+				return id, shortID
+			},
+		},
+		{
+			agent: "pi",
+			patterns: []string{
+				filepath.Join(home, ".pi", "sessions", "*.jsonl"),
+				filepath.Join(home, ".pi", "agent", "sessions", "*.jsonl"),
+				filepath.Join(home, ".config", "pi", "sessions", "*.jsonl"),
+			},
+			idExtractor: func(path string) (string, string) {
+				base := filepath.Base(path)
+				id := strings.TrimSuffix(base, filepath.Ext(base))
+				shortID := id
+				if len(shortID) > 8 {
+					shortID = shortID[:8]
+				}
+				return id, shortID
+			},
+		},
 	}
 
+	// Also discover custom directory if configured in env
+	if customDir := os.Getenv("SYL_TRANSCRIPT_DIR"); customDir != "" {
+		sources = append(sources, discoverySource{
+			agent: "custom",
+			patterns: []string{
+				filepath.Join(customDir, "*.jsonl"),
+				filepath.Join(customDir, "*", "*.jsonl"),
+			},
+			idExtractor: func(path string) (string, string) {
+				base := filepath.Base(path)
+				id := strings.TrimSuffix(base, filepath.Ext(base))
+				shortID := id
+				if len(shortID) > 8 {
+					shortID = shortID[:8]
+				}
+				return id, shortID
+			},
+		})
+	}
+
+	seenPaths := make(map[string]bool)
 	var sessions []SessionInfo
 
-	for _, m := range matches {
-		info, err := os.Stat(m)
-		if err != nil {
-			continue
-		}
+	for _, src := range sources {
+		for _, pat := range src.patterns {
+			matches, err := filepath.Glob(pat)
+			if err != nil {
+				continue
+			}
 
-		// Extract session UUID from path: .../brain/<UUID>/.system_generated/...
-		parts := strings.Split(m, string(filepath.Separator))
-		sessionID := "unknown"
-		for i, p := range parts {
-			if p == "brain" && i+1 < len(parts) {
-				sessionID = parts[i+1]
-				break
+			for _, m := range matches {
+				if seenPaths[m] {
+					continue
+				}
+				seenPaths[m] = true
+
+				info, err := os.Stat(m)
+				if err != nil || info.IsDir() {
+					continue
+				}
+
+				id, shortID := src.idExtractor(m)
+				title := extractSessionTitle(m)
+				if strings.HasPrefix(title, "Return ONLY a 2 to 4 word") || strings.Contains(title, "describing the topic") {
+					continue
+				}
+
+				sessions = append(sessions, SessionInfo{
+					ID:      id,
+					ShortID: shortID,
+					Title:   title,
+					Path:    m,
+					ModTime: info.ModTime(),
+					Agent:   src.agent,
+				})
 			}
 		}
+	}
 
-		shortID := sessionID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
+	// Check local current working directory for transcript.jsonl
+	for _, localPath := range []string{"transcript.jsonl", filepath.Join(".syl", "transcript.jsonl")} {
+		if abs, err := filepath.Abs(localPath); err == nil && !seenPaths[abs] {
+			if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+				seenPaths[abs] = true
+				title := extractSessionTitle(abs)
+				sessions = append(sessions, SessionInfo{
+					ID:      "local",
+					ShortID: "local",
+					Title:   title,
+					Path:    abs,
+					ModTime: info.ModTime(),
+					Agent:   "local",
+				})
+			}
 		}
-
-		title := extractSessionTitle(m)
-		if strings.HasPrefix(title, "Return ONLY a 2 to 4 word") || strings.Contains(title, "describing the topic") {
-			continue
-		}
-
-		sessions = append(sessions, SessionInfo{
-			ID:      sessionID,
-			ShortID: shortID,
-			Title:   title,
-			Path:    m,
-			ModTime: info.ModTime(),
-		})
 	}
 
 	sort.Slice(sessions, func(i, j int) bool {
@@ -103,8 +202,8 @@ func extractSessionTitle(path string) string {
 			continue
 		}
 
-		if rec.Type == "USER_INPUT" && rec.Content != "" {
-			text := rec.Content
+		if rec.IsUser() && rec.GetContent() != "" {
+			text := rec.GetContent()
 			if matches := userRequestRegex.FindStringSubmatch(text); len(matches) > 1 {
 				text = strings.TrimSpace(matches[1])
 			}
@@ -124,16 +223,38 @@ func extractSessionTitle(path string) string {
 	return "Empty session"
 }
 
-// FindSessionByID matches a session by exact UUID or prefix.
+// FindSessionByID matches a session by exact UUID, prefix, or direct file path.
 func FindSessionByID(query string) (*SessionInfo, error) {
-	sessions, err := ListSessions(50)
+	// 1. Direct file path check
+	if stat, err := os.Stat(query); err == nil && !stat.IsDir() {
+		abs, err := filepath.Abs(query)
+		if err == nil {
+			base := filepath.Base(abs)
+			id := strings.TrimSuffix(base, filepath.Ext(base))
+			shortID := id
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			return &SessionInfo{
+				ID:      id,
+				ShortID: shortID,
+				Title:   extractSessionTitle(abs),
+				Path:    abs,
+				ModTime: stat.ModTime(),
+				Agent:   "file",
+			}, nil
+		}
+	}
+
+	// 2. Discover sessions from supported agents
+	sessions, err := ListSessions(100)
 	if err != nil {
 		return nil, err
 	}
 
 	queryLower := strings.ToLower(strings.TrimSpace(query))
 	for _, s := range sessions {
-		if strings.ToLower(s.ID) == queryLower || strings.HasPrefix(strings.ToLower(s.ID), queryLower) {
+		if strings.ToLower(s.ID) == queryLower || strings.ToLower(s.ShortID) == queryLower || strings.HasPrefix(strings.ToLower(s.ID), queryLower) {
 			return &s, nil
 		}
 	}

@@ -15,17 +15,42 @@ import (
 
 var userRequestRegex = regexp.MustCompile(`(?s)<USER_REQUEST>(.*?)</USER_REQUEST>`)
 
-// TranscriptRecord represents a single JSON line in an Antigravity/agent transcript.
+// TranscriptRecord represents a single JSON line in an Antigravity, Claude Code, or generic agent transcript.
 type TranscriptRecord struct {
 	StepIndex int    `json:"step_index"`
 	Source    string `json:"source"`
 	Type      string `json:"type"`
+	Role      string `json:"role"`
 	Status    string `json:"status"`
 	Content   string `json:"content"`
+	Text      string `json:"text"`
+	Message   string `json:"message"`
 	CreatedAt string `json:"created_at"`
 	ToolCalls []struct {
 		Name string `json:"name"`
 	} `json:"tool_calls"`
+}
+
+func (r *TranscriptRecord) IsUser() bool {
+	t := strings.ToUpper(r.Type)
+	role := strings.ToUpper(r.Role)
+	return t == "USER_INPUT" || t == "USER" || role == "USER" || t == "HUMAN" || role == "HUMAN"
+}
+
+func (r *TranscriptRecord) IsAssistant() bool {
+	t := strings.ToUpper(r.Type)
+	role := strings.ToUpper(r.Role)
+	return t == "PLANNER_RESPONSE" || t == "ASSISTANT" || role == "ASSISTANT" || t == "MODEL" || role == "MODEL" || t == "BOT"
+}
+
+func (r *TranscriptRecord) GetContent() string {
+	if r.Content != "" {
+		return r.Content
+	}
+	if r.Text != "" {
+		return r.Text
+	}
+	return r.Message
 }
 
 type FileWatcher struct {
@@ -94,8 +119,8 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 				continue
 			}
 
-			if rec.Type == "USER_INPUT" && rec.Content != "" {
-				userText := rec.Content
+			if rec.IsUser() && rec.GetContent() != "" {
+				userText := rec.GetContent()
 				if matches := userRequestRegex.FindStringSubmatch(userText); len(matches) > 1 {
 					userText = strings.TrimSpace(matches[1])
 				}
@@ -116,12 +141,12 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 					Tool:      "Running " + toolName,
 					Timestamp: time.Now(),
 				})
-			} else if rec.Type == "PLANNER_RESPONSE" && rec.Content != "" && pendingUser != "" {
+			} else if rec.IsAssistant() && rec.GetContent() != "" && pendingUser != "" {
 				turnCount++
 				t := &Turn{
 					ID:        turnCount,
 					User:      pendingUser,
-					Assistant: rec.Content,
+					Assistant: rec.GetContent(),
 					Timestamp: time.Now(),
 					IsCatchUp: isCatchingUp,
 				}
