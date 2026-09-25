@@ -69,7 +69,7 @@ Flags:
 Keys in TUI:
   [j/k, ↑/↓]   Navigate reference cards
   [Enter]      Toggle full-width detail / split view
-  [y]          Yank card code snippet to system clipboard
+  [c / y]      Copy card code snippet to system clipboard
   [p]          Pin / unpin card
   [h]          Toggle version revision history
   [s]          Send card context to chat surface (cmux / clipboard)

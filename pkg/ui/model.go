@@ -180,7 +180,7 @@ func (m *Model) updateViewportContent() {
 	m.viewport.GotoTop()
 }
 
-func (m *Model) actionYank() tea.Cmd {
+func (m *Model) actionCopy() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
@@ -189,7 +189,7 @@ func (m *Model) actionYank() tea.Cmd {
 			snippet = strings.TrimSpace(matches[1])
 		}
 		if err := clipboard.WriteAll(snippet); err == nil {
-			m.toast = "✓ Snippet yanked to clipboard!"
+			m.toast = "✓ Copied to clipboard!"
 		} else {
 			m.toast = "Failed to copy to clipboard"
 		}
@@ -242,8 +242,8 @@ func (m *Model) actionSend() tea.Cmd {
 
 func (m *Model) handleButtonAction(action string) tea.Cmd {
 	switch action {
-	case "yank":
-		return m.actionYank()
+	case "copy":
+		return m.actionCopy()
 	case "pin":
 		m.actionPin()
 	case "history":
@@ -410,8 +410,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			m.actionPin()
 
-		case "y":
-			return m, m.actionYank()
+		case "c", "y":
+			return m, m.actionCopy()
 
 		case "s":
 			return m, m.actionSend()
@@ -453,7 +453,7 @@ func (m *Model) renderActionBar() string {
 		currX += width + 1
 	}
 
-	addButton("📋 Yank (y)", "yank", BtnStyle)
+	addButton("📋 Copy (c)", "copy", BtnStyle)
 	addButton("📌 Pin (p)", "pin", BtnStyle)
 	if m.viewMode == ModeHistory {
 		addButton("📜 History (h)", "history", BtnHoverStyle)
