@@ -73,3 +73,39 @@ func TestDiscoverPeerFallback(t *testing.T) {
 		t.Errorf("expected clipboard or cmux target, got %s", target.Type)
 	}
 }
+
+func TestParseCmuxAgent(t *testing.T) {
+	output := `* surface:5  terminal  [focused]  "agyd"
+  surface:6  terminal  "syl"`
+
+	agent := ParseCmuxAgent(output, "surface:6")
+	if agent != "antigravity" {
+		t.Errorf("expected antigravity, got %s", agent)
+	}
+
+	claudeOutput := `  surface:1  terminal  "claude"
+* surface:2  terminal  [focused]  "syl"`
+
+	agentClaude := ParseCmuxAgent(claudeOutput, "surface:2")
+	if agentClaude != "claude" {
+		t.Errorf("expected claude, got %s", agentClaude)
+	}
+}
+
+func TestParseTmuxAgent(t *testing.T) {
+	output := `%0 1 agy
+%1 0 syl`
+
+	agent := ParseTmuxAgent(output, "%1")
+	if agent != "antigravity" {
+		t.Errorf("expected antigravity, got %s", agent)
+	}
+
+	outputClaude := `%0 1 claude
+%1 0 syl`
+
+	agentClaude := ParseTmuxAgent(outputClaude, "%1")
+	if agentClaude != "claude" {
+		t.Errorf("expected claude, got %s", agentClaude)
+	}
+}

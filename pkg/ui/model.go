@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -90,6 +92,21 @@ type Model struct {
 	sessionFilePath   string
 	lastTurnProcessed int
 	cardListOffset    int
+
+	// Interactive Actionable Block / Step Picker
+	showBlockPicker  bool
+	activeBlocks     []card.ActionBlock
+	selectedBlockIdx int
+
+	// Quick Search Across Cards
+	searchMode     bool
+	searchQuery    string
+	searchSavedIdx int
+
+	// In-TUI Session Switcher
+	showSessionSwitcher bool
+	sessionList         []watcher.SessionInfo
+	selectedSessionIdx  int
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -498,6 +515,419 @@ func (m *Model) actionExport() tea.Cmd {
 	})
 }
 
+func openURL(targetURL string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", targetURL)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", targetURL)
+	default:
+		cmd = exec.Command("xdg-open", targetURL)
+	}
+	return cmd.Start()
+}
+
+func (m *Model) actionToggleBlockPicker() {
+	if m.showBlockPicker {
+		m.showBlockPicker = false
+		return
+	}
+	cards := m.store.List()
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		m.toast = "No card selected"
+		return
+	}
+	blocks := card.ExtractActionBlocks(cards[m.selectedIndex].Content)
+	if len(blocks) == 0 {
+		m.toast = "No code blocks, steps, or URLs found in this card"
+		return
+	}
+	m.activeBlocks = blocks
+	m.selectedBlockIdx = 0
+	m.showBlockPicker = true
+}
+
+func (m *Model) actionCopyBlock(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(m.activeBlocks) {
+		return nil
+	}
+	blk := m.activeBlocks[idx]
+	if err := clipboard.WriteAll(blk.Content); err == nil {
+		m.toast = fmt.Sprintf("✓ Copied [%s] to clipboard!", blk.Badge)
+	} else {
+		m.toast = "Failed to copy block"
+	}
+	m.showBlockPicker = false
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+func (m *Model) actionSendBlock(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(m.activeBlocks) {
+		return nil
+	}
+	blk := m.activeBlocks[idx]
+	res, err := multiplexer.Send(blk.Content, "")
+	if err != nil {
+		m.toast = fmt.Sprintf("Send error: %v", err)
+	} else {
+		m.toast = res
+	}
+	m.showBlockPicker = false
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+func (m *Model) actionOpenBlockURL(idx int) tea.Cmd {
+	if idx < 0 || idx >= len(m.activeBlocks) {
+		return nil
+	}
+	blk := m.activeBlocks[idx]
+	if blk.Type != card.BlockURL {
+		return nil
+	}
+	if err := openURL(blk.Content); err == nil {
+		m.toast = fmt.Sprintf("✓ Opened %s in browser!", blk.Preview)
+	} else {
+		m.toast = fmt.Sprintf("Failed to open URL: %v", err)
+	}
+	m.showBlockPicker = false
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+func (m *Model) actionOpenURL() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		m.toast = "No card selected"
+		return nil
+	}
+	blocks := card.ExtractActionBlocks(cards[m.selectedIndex].Content)
+	var urlBlocks []card.ActionBlock
+	for _, b := range blocks {
+		if b.Type == card.BlockURL {
+			urlBlocks = append(urlBlocks, b)
+		}
+	}
+	if len(urlBlocks) == 0 {
+		m.toast = "No URLs found in this card"
+		return nil
+	}
+	if len(urlBlocks) == 1 {
+		if err := openURL(urlBlocks[0].Content); err == nil {
+			m.toast = fmt.Sprintf("✓ Opened %s in browser!", urlBlocks[0].Preview)
+		} else {
+			m.toast = fmt.Sprintf("Failed to open URL: %v", err)
+		}
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+	m.activeBlocks = urlBlocks
+	m.selectedBlockIdx = 0
+	m.showBlockPicker = true
+	return nil
+}
+
+func (m *Model) applySearchQuery() {
+	cards := m.store.List()
+	if len(cards) == 0 {
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	if q == "" {
+		return
+	}
+
+	for i, c := range cards {
+		if strings.Contains(strings.ToLower(c.Title), q) ||
+			strings.Contains(strings.ToLower(c.Content), q) ||
+			strings.Contains(fmt.Sprintf("%d", c.Number), q) {
+			m.selectedIndex = i
+			m.updateViewportContent()
+			return
+		}
+	}
+}
+
+func (m *Model) jumpSearchNext() {
+	cards := m.store.List()
+	if len(cards) == 0 {
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	if q == "" {
+		return
+	}
+	start := (m.selectedIndex + 1) % len(cards)
+	for i := 0; i < len(cards); i++ {
+		idx := (start + i) % len(cards)
+		c := cards[idx]
+		if strings.Contains(strings.ToLower(c.Title), q) ||
+			strings.Contains(strings.ToLower(c.Content), q) ||
+			strings.Contains(fmt.Sprintf("%d", c.Number), q) {
+			m.selectedIndex = idx
+			m.updateViewportContent()
+			return
+		}
+	}
+}
+
+func (m *Model) jumpSearchPrev() {
+	cards := m.store.List()
+	if len(cards) == 0 {
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	if q == "" {
+		return
+	}
+	start := (m.selectedIndex - 1 + len(cards)) % len(cards)
+	for i := 0; i < len(cards); i++ {
+		idx := (start - i + len(cards)) % len(cards)
+		c := cards[idx]
+		if strings.Contains(strings.ToLower(c.Title), q) ||
+			strings.Contains(strings.ToLower(c.Content), q) ||
+			strings.Contains(fmt.Sprintf("%d", c.Number), q) {
+			m.selectedIndex = idx
+			m.updateViewportContent()
+			return
+		}
+	}
+}
+
+func (m *Model) countSearchMatches() int {
+	cards := m.store.List()
+	q := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	if q == "" {
+		return len(cards)
+	}
+	count := 0
+	for _, c := range cards {
+		if strings.Contains(strings.ToLower(c.Title), q) ||
+			strings.Contains(strings.ToLower(c.Content), q) ||
+			strings.Contains(fmt.Sprintf("%d", c.Number), q) {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
+	m.saveSessionState()
+	m.sessionLabel = sess.ShortID
+	m.store = card.NewStore()
+	m.selectedIndex = 0
+	m.lastTurnProcessed = 0
+	m.showSessionSwitcher = false
+
+	if path, err := card.SessionFilePath(sess.ShortID); err == nil {
+		m.sessionFilePath = path
+		if snap, err := m.store.LoadSnapshot(path); err == nil {
+			m.lastTurnProcessed = snap.LastTurnProcessed
+		}
+	}
+
+	harnessChoice := "auto"
+	switch strings.ToLower(sess.Agent) {
+	case "antigravity", "agy":
+		harnessChoice = "agy"
+	case "claude":
+		harnessChoice = "claude"
+	case "pi":
+		harnessChoice = "pi"
+	}
+	m.harness = harness.NewAutoHarness(harnessChoice, "")
+	m.runner = harness.NewRunner(m.harness, 1)
+
+	m.turnCh = make(chan *watcher.Turn, 100)
+	m.activityCh = make(chan watcher.AgentActivity, 20)
+	fw := watcher.NewFileWatcher(sess.Path)
+	go func() {
+		_ = fw.Watch(context.Background(), m.turnCh, m.activityCh)
+	}()
+
+	m.toast = fmt.Sprintf("✓ Switched to session [%s] (%s)", sess.ShortID, sess.Agent)
+	m.updateViewportContent()
+
+	return tea.Batch(
+		m.listenForTurns(),
+		m.listenForActivity(),
+		tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		}),
+	)
+}
+
+func (m *Model) buildBlockPickerModal() string {
+	boxWidth := 74
+	if m.width > 20 && m.width < 78 {
+		boxWidth = m.width - 4
+	}
+
+	cards := m.store.List()
+	cardNum := 0
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		cardNum = cards[m.selectedIndex].Number
+	}
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPrimary).
+		Render(fmt.Sprintf("📦 ACTIONABLE STEPS & COMMANDS (CARD #%d)", cardNum))
+
+	sub := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render("Press 1-9 to yank instantly, Enter to copy, s to send next door, o to open URL")
+
+	var b strings.Builder
+	b.WriteString(title + "\n" + sub + "\n\n")
+
+	if len(m.activeBlocks) == 0 {
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No actionable blocks found in this card.\n"))
+	} else {
+		for i, blk := range m.activeBlocks {
+			isSelected := i == m.selectedBlockIdx
+			keyStr := "   "
+			if blk.Key != "" {
+				keyStr = fmt.Sprintf("[%s]", blk.Key)
+			}
+			keyStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorSuccess).Width(5)
+			if isSelected {
+				keyStyle = keyStyle.Foreground(ColorPrimary)
+			}
+
+			badgeBg := ColorSecondary
+			switch blk.Type {
+			case card.BlockCode:
+				badgeBg = ColorSuccess
+			case card.BlockStep:
+				badgeBg = ColorWarning
+			case card.BlockURL:
+				badgeBg = ColorPrimary
+			}
+			badgeStyle := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#000000")).
+				Background(badgeBg).
+				Padding(0, 1)
+
+			badgeRendered := badgeStyle.Render(blk.Badge)
+			prefix := "  "
+			if isSelected {
+				prefix = "❯ "
+			}
+
+			availPrev := boxWidth - 22
+			prev := blk.Preview
+			if len(prev) > availPrev && availPrev > 6 {
+				prev = prev[:availPrev-3] + "..."
+			}
+
+			line := fmt.Sprintf("%s%s %-10s %s", prefix, keyStyle.Render(keyStr), badgeRendered, prev)
+			if isSelected {
+				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth - 4).Render(line) + "\n")
+			} else {
+				b.WriteString(line + "\n")
+			}
+		}
+	}
+
+	b.WriteString("\n")
+	footer := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Italic(true).
+		Render("[1-9] Quick Yank • [Enter] Yank • [s] Send to Peer • [o] Open URL • [Esc] Close")
+	b.WriteString(footer)
+
+	modalBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Background(lipgloss.Color("#1E222A")).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(b.String())
+
+	return modalBox
+}
+
+func (m *Model) buildSessionSwitcherModal() string {
+	boxWidth := 74
+	if m.width > 20 && m.width < 78 {
+		boxWidth = m.width - 4
+	}
+
+	title := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorPrimary).
+		Render("🔄 SWITCH ACTIVE CONVERSATION SESSION")
+
+	sub := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render("Select a recent session to watch (Antigravity, Claude Code, Pi)")
+
+	var b strings.Builder
+	b.WriteString(title + "\n" + sub + "\n\n")
+
+	if len(m.sessionList) == 0 {
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No conversation sessions found.\n"))
+	} else {
+		for i, s := range m.sessionList {
+			isSelected := i == m.selectedSessionIdx
+			prefix := "  "
+			if isSelected {
+				prefix = "❯ "
+			}
+
+			agentTag := fmt.Sprintf("[%s]", s.Agent)
+			if s.Agent == "" {
+				agentTag = "[agy]"
+			}
+			agentStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Width(15)
+
+			idStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Width(10)
+			idRendered := idStyle.Render(s.ShortID)
+
+			timeAgo := watcher.FormatTimeAgo(s.ModTime)
+			timeStyle := lipgloss.NewStyle().Foreground(ColorMuted).Width(12)
+
+			availTitle := boxWidth - 44
+			titleText := s.Title
+			if len(titleText) > availTitle && availTitle > 6 {
+				titleText = titleText[:availTitle-3] + "..."
+			}
+
+			line := fmt.Sprintf("%s%s %s %s %s", prefix, agentStyle.Render(agentTag), idRendered, lipgloss.NewStyle().Render(titleText), timeStyle.Render(timeAgo))
+			if isSelected {
+				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth - 4).Render(line) + "\n")
+			} else {
+				b.WriteString(line + "\n")
+			}
+		}
+	}
+
+	b.WriteString("\n")
+	footer := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Italic(true).
+		Render("[j/k, ↑/↓] Navigate • [Enter] Switch • [Esc] Cancel")
+	b.WriteString(footer)
+
+	modalBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Background(lipgloss.Color("#1E222A")).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(b.String())
+
+	return modalBox
+}
+
 func (m *Model) buildHelpModal() string {
 	boxWidth := 74
 	if m.width > 20 && m.width < 78 {
@@ -539,6 +969,10 @@ func (m *Model) buildHelpModal() string {
 	}
 
 	b.WriteString(secHeader.Render("Clipboard & Actions") + "\n")
+	b.WriteString(colKey.Render("b") + colDesc.Render("Surgical Block/Step picker (yank 1-9, run)") + "\n")
+	b.WriteString(colKey.Render("u") + colDesc.Render("Open card URL directly in web browser") + "\n")
+	b.WriteString(colKey.Render("/") + colDesc.Render("Search & filter reference cards") + "\n")
+	b.WriteString(colKey.Render("S") + colDesc.Render("Switch active conversation session") + "\n")
 	b.WriteString(colKey.Render("c") + colDesc.Render("Copy extracted code block(s) to clipboard") + "\n")
 	b.WriteString(colKey.Render("C / y") + colDesc.Render("Copy full card markdown content") + "\n")
 	b.WriteString(colKey.Render("p") + colDesc.Render("Pin / unpin card (protect from pruning)") + "\n")
@@ -746,6 +1180,20 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		m.actionToggleHistory()
 	case "send":
 		return m.actionSend()
+	case "block_picker":
+		m.actionToggleBlockPicker()
+	case "search":
+		m.searchMode = true
+		m.searchQuery = ""
+		m.searchSavedIdx = m.selectedIndex
+	case "sessions":
+		if !m.isDemo {
+			if sessions, err := watcher.ListSessions(12); err == nil && len(sessions) > 0 {
+				m.sessionList = sessions
+				m.selectedSessionIdx = 0
+				m.showSessionSwitcher = true
+			}
+		}
 	case "help":
 		m.showHelp = !m.showHelp
 	case "demo_next":
@@ -904,6 +1352,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showHelp = false
 				return m, nil
 			}
+			if m.showBlockPicker {
+				m.showBlockPicker = false
+				return m, nil
+			}
+			if m.showSessionSwitcher {
+				m.showSessionSwitcher = false
+				return m, nil
+			}
 
 			if msg.Button == tea.MouseButtonLeft {
 				// 1. Check Action Bar clicks (Row 1)
@@ -975,6 +1431,97 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if m.showBlockPicker {
+			switch msg.String() {
+			case "esc", "q", "b":
+				m.showBlockPicker = false
+				return m, nil
+			case "up", "k":
+				if m.selectedBlockIdx > 0 {
+					m.selectedBlockIdx--
+				}
+				return m, nil
+			case "down", "j":
+				if m.selectedBlockIdx < len(m.activeBlocks)-1 {
+					m.selectedBlockIdx++
+				}
+				return m, nil
+			case "enter", "c":
+				return m, m.actionCopyBlock(m.selectedBlockIdx)
+			case "s":
+				return m, m.actionSendBlock(m.selectedBlockIdx)
+			case "o":
+				return m, m.actionOpenBlockURL(m.selectedBlockIdx)
+			case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0":
+				for idx, blk := range m.activeBlocks {
+					if blk.Key == msg.String() {
+						return m, m.actionCopyBlock(idx)
+					}
+				}
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
+		if m.showSessionSwitcher {
+			switch msg.String() {
+			case "esc", "q", "S":
+				m.showSessionSwitcher = false
+				return m, nil
+			case "up", "k":
+				if m.selectedSessionIdx > 0 {
+					m.selectedSessionIdx--
+				}
+				return m, nil
+			case "down", "j":
+				if m.selectedSessionIdx < len(m.sessionList)-1 {
+					m.selectedSessionIdx++
+				}
+				return m, nil
+			case "enter":
+				if len(m.sessionList) > 0 && m.selectedSessionIdx < len(m.sessionList) {
+					return m, m.actionSwitchSession(m.sessionList[m.selectedSessionIdx])
+				}
+				return m, nil
+			default:
+				return m, nil
+			}
+		}
+
+		if m.searchMode {
+			switch msg.String() {
+			case "esc":
+				m.searchMode = false
+				m.searchQuery = ""
+				m.selectedIndex = m.searchSavedIdx
+				m.updateViewportContent()
+				return m, nil
+			case "enter":
+				m.searchMode = false
+				return m, nil
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+					m.applySearchQuery()
+				}
+				return m, nil
+			case "down", "tab", "ctrl+n":
+				m.jumpSearchNext()
+				return m, nil
+			case "up", "shift+tab", "ctrl+p":
+				m.jumpSearchPrev()
+				return m, nil
+			default:
+				if len(msg.String()) == 1 {
+					m.searchQuery += msg.String()
+					m.applySearchQuery()
+					return m, nil
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.saveSessionState()
@@ -982,6 +1529,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "?", "f1":
 			m.showHelp = true
+			return m, nil
+
+		case "b":
+			m.actionToggleBlockPicker()
+			return m, nil
+
+		case "u":
+			return m, m.actionOpenURL()
+
+		case "/":
+			m.searchMode = true
+			m.searchQuery = ""
+			m.searchSavedIdx = m.selectedIndex
+			return m, nil
+
+		case "S":
+			if m.isDemo {
+				m.toast = "Demo mode: session switching disabled"
+				return m, nil
+			}
+			sessions, err := watcher.ListSessions(12)
+			if err != nil || len(sessions) == 0 {
+				m.toast = "No active or past sessions found"
+				return m, nil
+			}
+			m.sessionList = sessions
+			m.selectedSessionIdx = 0
+			m.showSessionSwitcher = true
 			return m, nil
 
 		case "e":
@@ -1112,11 +1687,12 @@ func (m *Model) renderActionBar() string {
 		addButton("👁 Hide Turns (Tab)", "toggle_focus", BtnStyle)
 	}
 
-	// 2. Copy Code
+	// 2. Copy Code & Surgical Blocks
 	addButton("📋 Copy (c)", "copy", BtnStyle)
+	addButton("📦 Steps (b)", "block_picker", BtnStyle)
 
 	// 3. Copy All (when width allows)
-	if m.width >= 85 {
+	if m.width >= 90 {
 		addButton("📄 All (C)", "copy_all", BtnStyle)
 	}
 
@@ -1131,13 +1707,21 @@ func (m *Model) renderActionBar() string {
 	addButton("📌 Pin (p)", "pin", BtnStyle)
 	addButton("🗑 Drop (x)", "drop", BtnStyle)
 
-	// 6. Export (when width allows)
-	if m.width >= 90 {
+	// 6. Search & Sessions (when width allows)
+	if m.width >= 100 {
+		addButton("🔍 Find (/)", "search", BtnStyle)
+		if !m.isDemo {
+			addButton("🔄 Switch (S)", "sessions", BtnStyle)
+		}
+	}
+
+	// 7. Export (when width allows)
+	if m.width >= 115 {
 		addButton("💾 Export (e)", "export", BtnStyle)
 	}
 
-	// 7. History (when width allows)
-	if m.width >= 105 {
+	// 8. History (when width allows)
+	if m.width >= 130 {
 		if m.viewMode == ModeHistory {
 			addButton("📜 History (h)", "history", BtnHoverStyle)
 		} else {
@@ -1214,8 +1798,12 @@ func (m *Model) renderBaseView() string {
 	if len(cards) == 0 {
 		var emptyMsg string
 		if m.isAgentBusy {
-			emptyMsg = fmt.Sprintf("%s Agent is processing your request in AGY...\n\nAction: %s\nPrompt: %q\n\nReference cards will appear automatically when the turn completes.",
-				m.spinner.View(), m.agentTool, m.agentPrompt)
+			agentName := "AGY"
+			if m.runner != nil && m.runner.Name() != "" && m.runner.Name() != "heuristic" {
+				agentName = strings.ToUpper(m.runner.Name())
+			}
+			emptyMsg = fmt.Sprintf("%s Agent is processing your request in %s...\n\nAction: %s\nPrompt: %q\n\nReference cards will appear automatically when the turn completes.",
+				m.spinner.View(), agentName, m.agentTool, m.agentPrompt)
 		} else {
 			emptyMsg = "No reference cards captured yet.\nStart chatting in your AI assistant or click [Next Turn] to preview."
 		}
@@ -1231,17 +1819,20 @@ func (m *Model) renderBaseView() string {
 
 	// 4. Footer
 	var hintText string
-	if m.width < 90 {
+	if m.searchMode {
+		matches := m.countSearchMatches()
+		hintText = fmt.Sprintf("🔍 Search cards: %s_  [%d matches]  (Enter: Keep • Esc: Cancel • ↑/↓: Next/Prev)", m.searchQuery, matches)
+	} else if m.width < 90 {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 Tab: Show • ↑/↓: Scroll • j/k: Turn • c: Copy • ?: Help • e: Export"
+			hintText = "💡 Tab: Show • b: Steps • /: Search • ?: Help • q: Quit"
 		} else {
-			hintText = "💡 Tab: Hide • ↑/↓: Scroll • j/k: Turn • c: Copy • ?: Help • e: Export"
+			hintText = "💡 Tab: Hide • b: Steps • /: Search • ?: Help • q: Quit"
 		}
 	} else {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Show turns • c: Copy • r: Raw • e: Export • ?: Help Glossary"
+			hintText = "💡 ↑/↓: Scroll • j/k: Turn • b: Steps • c: Copy • /: Search • S: Sessions • ?: Help"
 		} else {
-			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Hide turns • c: Copy • r: Raw • e: Export • ?: Help Glossary"
+			hintText = "💡 ↑/↓: Scroll • j/k: Turn • Tab: Focus • b: Steps • c: Copy • /: Search • S: Sessions • ?: Help"
 		}
 	}
 	hints := FooterStyle.Render(hintText)
@@ -1253,6 +1844,12 @@ func (m *Model) View() string {
 	base := m.renderBaseView()
 	if m.showHelp {
 		return m.overlayModalOnBlurredBackdrop(base, m.buildHelpModal())
+	}
+	if m.showBlockPicker {
+		return m.overlayModalOnBlurredBackdrop(base, m.buildBlockPickerModal())
+	}
+	if m.showSessionSwitcher {
+		return m.overlayModalOnBlurredBackdrop(base, m.buildSessionSwitcherModal())
 	}
 	return base
 }

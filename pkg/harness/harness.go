@@ -3,7 +3,9 @@ package harness
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -92,6 +94,20 @@ type AgyHarness struct {
 	Model string
 }
 
+func findAgyPath() (string, error) {
+	if p, err := exec.LookPath("agy"); err == nil {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		localPath := filepath.Join(home, ".local", "bin", "agy")
+		if _, err := os.Stat(localPath); err == nil {
+			return localPath, nil
+		}
+	}
+	return "", fmt.Errorf("agy executable not found")
+}
+
 func NewAgyHarness(model string) *AgyHarness {
 	return &AgyHarness{Model: model}
 }
@@ -101,12 +117,12 @@ func (h *AgyHarness) Name() string {
 }
 
 func (h *AgyHarness) Available() bool {
-	_, err := exec.LookPath("agy")
+	_, err := findAgyPath()
 	return err == nil
 }
 
 func (h *AgyHarness) Summarize(ctx context.Context, userPrompt, assistantContent string) (string, error) {
-	agyPath, err := exec.LookPath("agy")
+	agyPath, err := findAgyPath()
 	if err != nil {
 		return "", err
 	}
@@ -135,6 +151,22 @@ func (h *AgyHarness) Summarize(ctx context.Context, userPrompt, assistantContent
 // 2. Claude Code CLI Harness (claude)
 // -------------------------------------------------------------------------
 
+func findClaudePath() (string, error) {
+	if p, err := exec.LookPath("claude"); err == nil {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		for _, sub := range []string{".local/bin/claude"} {
+			localPath := filepath.Join(home, sub)
+			if _, err := os.Stat(localPath); err == nil {
+				return localPath, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("claude executable not found")
+}
+
 type ClaudeHarness struct {
 	Model string
 }
@@ -148,12 +180,12 @@ func (h *ClaudeHarness) Name() string {
 }
 
 func (h *ClaudeHarness) Available() bool {
-	_, err := exec.LookPath("claude")
+	_, err := findClaudePath()
 	return err == nil
 }
 
 func (h *ClaudeHarness) Summarize(ctx context.Context, userPrompt, assistantContent string) (string, error) {
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := findClaudePath()
 	if err != nil {
 		return "", err
 	}
@@ -348,9 +380,9 @@ func NewAutoHarness(preferred string, modelOverride string) *AutoHarness {
 
 	// Add preferred harness first if specified
 	switch strings.ToLower(preferred) {
-	case "agy":
+	case "agy", "antigravity":
 		rawCandidates = append(rawCandidates, NewAgyHarness(modelOverride))
-	case "claude":
+	case "claude", "claude-code":
 		rawCandidates = append(rawCandidates, NewClaudeHarness(modelOverride))
 	case "pi":
 		rawCandidates = append(rawCandidates, NewPiHarness(modelOverride))

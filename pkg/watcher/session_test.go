@@ -116,4 +116,23 @@ func TestListSessionsWithCustomDir(t *testing.T) {
 	}
 }
 
+func TestDetectAgentFromPath(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"/Users/user/.gemini/antigravity-cli/brain/abc/.system_generated/logs/transcript.jsonl", "antigravity"},
+		{"/Users/user/.claude/projects/proj/session.jsonl", "claude"},
+		{"/Users/user/.pi/sessions/sess.jsonl", "pi"},
+		{"/Users/user/workspace/custom.jsonl", "file"},
+	}
+
+	for _, tt := range tests {
+		got := DetectAgentFromPath(tt.path)
+		if got != tt.expected {
+			t.Errorf("DetectAgentFromPath(%q) = %q, expected %q", tt.path, got, tt.expected)
+		}
+	}
+}
+
 

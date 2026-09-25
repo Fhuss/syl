@@ -648,4 +648,104 @@ func TestModelOpUpdateUpgradesNonDefinitiveTitle(t *testing.T) {
 	}
 }
 
+func TestModelBlockPickerToggle(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Title:   "Deployment Guide",
+		Content: "1. Build container:\n```bash\ndocker build -t app .\n```\n2. Open https://example.com/status\n",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+
+	// Press 'b' to open block picker
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	model := updated.(*Model)
+
+	if !model.showBlockPicker {
+		t.Fatalf("expected showBlockPicker to be true after pressing 'b'")
+	}
+	if len(model.activeBlocks) == 0 {
+		t.Fatalf("expected activeBlocks to be extracted")
+	}
+
+	// View should contain the block picker modal
+	view := model.View()
+	if !strings.Contains(view, "ACTIONABLE STEPS") {
+		t.Fatalf("expected view to contain block picker modal, got:\n%s", view)
+	}
+
+	// Press '1' to copy first block
+	updated2, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	model2 := updated2.(*Model)
+	if model2.showBlockPicker {
+		t.Fatalf("expected block picker to close after selecting key 1")
+	}
+}
+
+func TestModelSearchMode(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "PostgreSQL Database", Content: "postgres config"})
+	store.Add(&card.Card{ID: "c2", Title: "Redis Cache Cluster", Content: "redis config"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+
+	// Press '/' to start search
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m = u.(*Model)
+	if !m.searchMode {
+		t.Fatalf("expected searchMode to be true")
+	}
+
+	// Type 'r', 'e', 'd'
+	for _, r := range "red" {
+		u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = u.(*Model)
+	}
+
+	// Should select card 2 (Redis)
+	if m.selectedIndex != 1 {
+		t.Fatalf("expected selectedIndex to jump to 1 for 'red', got %d", m.selectedIndex)
+	}
+
+	// Press Enter to confirm search
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = u.(*Model)
+	if m.searchMode {
+		t.Fatalf("expected searchMode to be false after Enter")
+	}
+	if m.selectedIndex != 1 {
+		t.Fatalf("expected selectedIndex to remain 1, got %d", m.selectedIndex)
+	}
+}
+
+func TestModelSessionSwitcherToggle(t *testing.T) {
+	store := card.NewStore()
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+
+	// Press 'S' to open session switcher
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	m = u.(*Model)
+
+	// If sessions found on this machine, modal opens
+	if m.showSessionSwitcher {
+		view := m.View()
+		if !strings.Contains(view, "SWITCH") {
+			t.Fatalf("expected view to contain session switcher modal")
+		}
+		// Press 'Esc' to close
+		u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = u.(*Model)
+		if m.showSessionSwitcher {
+			t.Fatalf("expected session switcher to close on Esc")
+		}
+	}
+}
+
 

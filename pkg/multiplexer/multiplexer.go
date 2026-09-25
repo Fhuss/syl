@@ -217,3 +217,97 @@ func ParseTmuxPanes(output string, currentPane string) (string, bool) {
 	}
 	return "", false
 }
+
+// ParseCmuxAgent inspects the peer terminal surfaces to detect if an AI assistant CLI is running.
+func ParseCmuxAgent(output string, currentSurface string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		matches := cmuxPanelRegex.FindStringSubmatch(line)
+		if len(matches) < 4 {
+			continue
+		}
+
+		surfaceID := matches[2]
+		panelType := matches[3]
+		rest := strings.ToLower(matches[4])
+
+		if panelType != "terminal" {
+			continue
+		}
+		if currentSurface != "" && surfaceID == currentSurface {
+			continue
+		}
+		if strings.Contains(rest, `"syl`) {
+			continue
+		}
+
+		if strings.Contains(rest, "agy") || strings.Contains(rest, "antigravity") {
+			return "antigravity"
+		}
+		if strings.Contains(rest, "claude") {
+			return "claude"
+		}
+		if strings.Contains(rest, "pi") {
+			return "pi"
+		}
+	}
+	return ""
+}
+
+// ParseTmuxAgent inspects tmux panes to detect if an AI assistant CLI is running.
+func ParseTmuxAgent(output string, currentPane string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		paneID := fields[0]
+		if paneID == currentPane {
+			continue
+		}
+		cmd := strings.ToLower(fields[2])
+		if strings.Contains(cmd, "agy") || strings.Contains(cmd, "antigravity") {
+			return "antigravity"
+		}
+		if strings.Contains(cmd, "claude") {
+			return "claude"
+		}
+		if strings.Contains(cmd, "pi") {
+			return "pi"
+		}
+	}
+	return ""
+}
+
+// DetectPeerAgent inspects adjacent multiplexer panels (cmux or tmux) to identify
+// which AI assistant (e.g. "antigravity", "claude", "pi") is running alongside syl.
+func DetectPeerAgent() string {
+	// 1. Check cmux
+	if _, err := exec.LookPath("cmux"); err == nil {
+		if out, err := exec.Command("cmux", "list-panels").Output(); err == nil {
+			if agent := ParseCmuxAgent(string(out), os.Getenv("CMUX_SURFACE_ID")); agent != "" {
+				return agent
+			}
+		}
+	}
+
+	// 2. Check tmux
+	if os.Getenv("TMUX") != "" {
+		if _, err := exec.LookPath("tmux"); err == nil {
+			if out, err := exec.Command("tmux", "list-panes", "-F", "#{pane_id} #{pane_active} #{pane_current_command}").Output(); err == nil {
+				if agent := ParseTmuxAgent(string(out), os.Getenv("TMUX_PANE")); agent != "" {
+					return agent
+				}
+			}
+		}
+	}
+
+	return ""
+}
+

@@ -223,6 +223,34 @@ func extractSessionTitle(path string) string {
 	return "Empty session"
 }
 
+// FormatTimeAgo formats a time difference into a human readable string.
+func FormatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	if d < time.Minute {
+		return "just now"
+	} else if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	} else if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return t.Format("Jan 02 15:04")
+}
+
+// DetectAgentFromPath attempts to infer the AI agent from a transcript path.
+func DetectAgentFromPath(path string) string {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	if strings.Contains(lower, "antigravity") || strings.Contains(lower, ".gemini") {
+		return "antigravity"
+	}
+	if strings.Contains(lower, ".claude") || strings.Contains(lower, "claude") {
+		return "claude"
+	}
+	if strings.Contains(lower, ".pi") || strings.Contains(lower, "/pi/") {
+		return "pi"
+	}
+	return "file"
+}
+
 // FindSessionByID matches a session by exact UUID, prefix, or direct file path.
 func FindSessionByID(query string) (*SessionInfo, error) {
 	// 1. Direct file path check
@@ -241,7 +269,7 @@ func FindSessionByID(query string) (*SessionInfo, error) {
 				Title:   extractSessionTitle(abs),
 				Path:    abs,
 				ModTime: stat.ModTime(),
-				Agent:   "file",
+				Agent:   DetectAgentFromPath(abs),
 			}, nil
 		}
 	}

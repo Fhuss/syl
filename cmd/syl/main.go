@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/config"
 	"github.com/Fhuss/syl/pkg/harness"
+	"github.com/Fhuss/syl/pkg/multiplexer"
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/ui"
 	"github.com/Fhuss/syl/pkg/watcher"
@@ -20,15 +22,7 @@ import (
 const version = "0.1.0"
 
 func formatTimeAgo(t time.Time) string {
-	d := time.Since(t)
-	if d < time.Minute {
-		return "just now"
-	} else if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	} else if d < 24*time.Hour {
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
-	return t.Format("Jan 02 15:04")
+	return watcher.FormatTimeAgo(t)
 }
 
 func main() {
@@ -56,6 +50,10 @@ Keys in TUI:
   [↑/↓]        Scroll preview content (PgUp/PgDn, Ctrl+u/d)
   [j/k, ←/→]   Navigate reference turns / cards ([ and ] also work)
   [Tab/Enter]  Toggle focus view (hide/show turns column)
+  [b]          Surgical block & step picker (yank 1-9, run, open URL)
+  [u]          Open card URL directly in browser
+  [/]          Quick search & filter cards interactively
+  [S]          Switch active conversation session (Antigravity/Claude/Pi)
   [c]          Copy card code snippet(s) to system clipboard
   [C / y]      Copy full card markdown content to clipboard
   [r]          Toggle raw text mode (clean for mouse selection)
@@ -179,8 +177,13 @@ Keys in TUI:
 
 	var activityCh chan watcher.AgentActivity
 	sessionLabel := "demo"
+	var detectedAgent string
 	if !isDemo {
 		transcriptPath := fileFlag
+		if transcriptPath != "" {
+			detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
+		}
+
 		if transcriptPath == "" && sessionFlag != "" {
 			session, err := watcher.FindSessionByID(sessionFlag)
 			if err != nil {
@@ -189,10 +192,14 @@ Keys in TUI:
 			}
 			transcriptPath = session.Path
 			sessionLabel = session.ShortID
+			detectedAgent = session.Agent
 		}
 
 		if transcriptPath == "" {
 			transcriptPath = cfg.Watcher.TranscriptPath
+			if transcriptPath != "" {
+				detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
+			}
 		}
 
 		if transcriptPath == "" {
@@ -200,6 +207,14 @@ Keys in TUI:
 			if err == nil && len(sessions) > 0 {
 				transcriptPath = sessions[0].Path
 				sessionLabel = sessions[0].ShortID
+				detectedAgent = sessions[0].Agent
+			}
+		}
+
+		// Fall back to checking adjacent terminal in cmux or tmux
+		if detectedAgent == "" || detectedAgent == "unknown" || detectedAgent == "file" {
+			if peer := multiplexer.DetectPeerAgent(); peer != "" {
+				detectedAgent = peer
 			}
 		}
 
@@ -218,10 +233,20 @@ Keys in TUI:
 	// Choose subagent harness
 	harnessChoice := cfg.Subagent.Harness
 	if harnessFlag != "" {
+		// Explicit CLI flag always wins
 		harnessChoice = harnessFlag
-	}
-	if harnessChoice == "" {
-		harnessChoice = "auto"
+	} else if harnessChoice == "" || harnessChoice == "auto" {
+		// Auto-detect based on session agent or multiplexer peer
+		switch strings.ToLower(detectedAgent) {
+		case "antigravity", "agy":
+			harnessChoice = "agy"
+		case "claude":
+			harnessChoice = "claude"
+		case "pi":
+			harnessChoice = "pi"
+		default:
+			harnessChoice = "auto"
+		}
 	}
 
 	var subagentHarness harness.Harness

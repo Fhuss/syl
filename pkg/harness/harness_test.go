@@ -59,3 +59,16 @@ func TestAutoHarnessAvailable(t *testing.T) {
 		t.Fatalf("expected summary from auto harness, got %q (err: %v)", title, err)
 	}
 }
+
+func TestAutoHarnessAliases(t *testing.T) {
+	hAgy := NewAutoHarness("antigravity", "")
+	if len(hAgy.harnesses) == 0 || hAgy.harnesses[0].Name() != "agy" {
+		t.Errorf("expected first candidate to be agy, got %v", hAgy.harnesses[0].Name())
+	}
+
+	hClaude := NewAutoHarness("claude-code", "")
+	if len(hClaude.harnesses) == 0 || hClaude.harnesses[0].Name() != "claude" {
+		t.Errorf("expected first candidate to be claude, got %v", hClaude.harnesses[0].Name())
+	}
+}
+

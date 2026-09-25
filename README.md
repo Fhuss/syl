@@ -69,12 +69,12 @@ Replays a simulated multi-turn scenario to demonstrate live card patching and in
 ### Attach to an active session
 
 ```bash
-# Auto-detect the most recent Antigravity transcript
+# Zero-config: auto-detects session and harness (agy, claude, etc.)
 syl
 
-# Specify a harness for AI title summarization
-syl --harness agy        # Antigravity
-syl --harness claude     # Claude Code
+# (Optional) Explicit harness override
+syl --harness agy        # Force Antigravity
+syl --harness claude     # Force Claude Code
 syl --harness heuristic  # Fast offline fallback (no AI calls)
 
 # Point at a specific transcript file
@@ -122,6 +122,10 @@ Press `?` inside `syl` to open the interactive help glossary.
 | `←` / `→` | Switch to next / previous card |
 | `[` / `]` | Switch to previous / next card |
 | `Tab` | Toggle focus view (hide/show turns column) |
+| `b` | Surgical block & step picker (yank 1-9, run, open URL) |
+| `u` | Open detected card URL directly in browser |
+| `/` | Quick search & filter cards interactively |
+| `S` | Switch active conversation session without quitting |
 | `c` | Copy code snippet(s) from card to clipboard |
 | `C` | Copy full card markdown to clipboard |
 | `r` | Toggle raw text mode (clean for mouse selection) |
