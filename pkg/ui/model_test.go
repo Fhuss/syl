@@ -8,7 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/reconciler"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 func TestMain(m *testing.M) {
@@ -568,4 +570,82 @@ func TestModelActionSend(t *testing.T) {
 		t.Errorf("expected m.toast to be set after actionSend")
 	}
 }
+
+func TestModelOpUpdatePreservesDefinitiveTitle(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Title:   "Deploy Redis Cluster",
+		Content: "helm install redis bitnami/redis",
+	})
+
+	mockH := harness.NewHeuristicHarness()
+	m := NewModel(store, reconciler.NewMockReconciler(), mockH, nil, nil, false, "test-session")
+
+	turn := &watcher.Turn{
+		ID:        2,
+		User:      "also change replica count to 3",
+		Assistant: "Updated values.yaml",
+	}
+
+	mutMsg := MutationsAppliedMsg{
+		Turn: turn,
+		Mutations: []reconciler.Mutation{
+			{
+				Op:      reconciler.OpUpdate,
+				CardID:  "card-1",
+				Content: "helm upgrade redis bitnami/redis --set replicaCount=3",
+				Reason:  "Adjusted configuration in Turn 2",
+			},
+		},
+	}
+
+	_, _ = m.Update(mutMsg)
+
+	// Verify that the title is still "Deploy Redis Cluster" and not overwritten
+	c, ok := store.Get("card-1")
+	if !ok {
+		t.Fatalf("card-1 not found")
+	}
+	if c.Title != "Deploy Redis Cluster" {
+		t.Fatalf("expected title 'Deploy Redis Cluster' to be preserved, got %q", c.Title)
+	}
+}
+
+func TestModelOpUpdateUpgradesNonDefinitiveTitle(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Title:   "Procedure", // non-definitive title
+		Content: "some code",
+	})
+
+	mockH := harness.NewHeuristicHarness()
+	m := NewModel(store, reconciler.NewMockReconciler(), mockH, nil, nil, false, "test-session")
+
+	turn := &watcher.Turn{
+		ID:        2,
+		User:      "install docker on ubuntu",
+		Assistant: "sudo apt-get install docker.io",
+	}
+
+	mutMsg := MutationsAppliedMsg{
+		Turn: turn,
+		Mutations: []reconciler.Mutation{
+			{
+				Op:      reconciler.OpUpdate,
+				CardID:  "card-1",
+				Content: "sudo apt-get install docker.io",
+				Reason:  "Turn 2",
+			},
+		},
+	}
+
+	_, cmd := m.Update(mutMsg)
+
+	if cmd == nil {
+		t.Fatalf("expected cmd to be returned for non-definitive title")
+	}
+}
+
 

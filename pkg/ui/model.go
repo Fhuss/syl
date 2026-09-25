@@ -66,6 +66,7 @@ type Model struct {
 	store         *card.Store
 	reconciler    reconciler.Reconciler
 	harness       harness.Harness
+	runner        *harness.Runner
 	turnCh        chan *watcher.Turn
 	activityCh    chan watcher.AgentActivity
 	selectedIndex int
@@ -116,10 +117,16 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 		}
 	}
 
+	var rnr *harness.Runner
+	if h != nil {
+		rnr = harness.NewRunner(h, 1)
+	}
+
 	m := &Model{
 		store:             store,
 		reconciler:        rec,
 		harness:           h,
+		runner:            rnr,
 		turnCh:            turnCh,
 		activityCh:        activityCh,
 		selectedIndex:     0,
@@ -671,13 +678,10 @@ func (m *Model) renderHelpModal() string {
 
 func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
 	return func() tea.Msg {
-		if m.harness == nil || turn == nil {
+		if m.runner == nil || turn == nil {
 			return nil
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		title, err := m.harness.Summarize(ctx, turn.User, turn.Assistant)
+		title, err := m.runner.SummarizeTurn(context.Background(), m.sessionLabel, turn)
 		if err != nil || title == "" {
 			return nil
 		}
@@ -827,7 +831,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toast = fmt.Sprintf("Added: %s", mut.Title)
 
 				// 2. Queue AI summarization if not definitive in cache
-				if msg.Turn != nil && m.harness != nil {
+				if msg.Turn != nil && m.runner != nil {
 					hasDefinitive := false
 					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
 						hasDefinitive = true
@@ -842,7 +846,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case reconciler.OpUpdate:
 				m.store.Update(mut.CardID, mut.Content, mut.Reason)
 				m.toast = fmt.Sprintf("Updated: %s", mut.Reason)
-				if msg.Turn != nil && m.harness != nil {
+				if msg.Turn != nil && m.runner != nil {
+					// Check if card ALREADY has a definitive title
+					c, ok := m.store.Get(mut.CardID)
+					if ok && harness.IsDefinitiveTitle(c.Title) {
+						// Preserve established card title! Do not overwrite with follow-up turn prompt!
+						continue
+					}
+
 					hasDefinitive := false
 					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
 						hasDefinitive = true

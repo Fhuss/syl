@@ -344,30 +344,40 @@ type AutoHarness struct {
 }
 
 func NewAutoHarness(preferred string, modelOverride string) *AutoHarness {
-	var candidates []Harness
+	var rawCandidates []Harness
 
 	// Add preferred harness first if specified
 	switch strings.ToLower(preferred) {
 	case "agy":
-		candidates = append(candidates, NewAgyHarness(modelOverride))
+		rawCandidates = append(rawCandidates, NewAgyHarness(modelOverride))
 	case "claude":
-		candidates = append(candidates, NewClaudeHarness(modelOverride))
+		rawCandidates = append(rawCandidates, NewClaudeHarness(modelOverride))
 	case "pi":
-		candidates = append(candidates, NewPiHarness(modelOverride))
+		rawCandidates = append(rawCandidates, NewPiHarness(modelOverride))
 	case "ollama":
-		candidates = append(candidates, NewOllamaHarness(modelOverride))
+		rawCandidates = append(rawCandidates, NewOllamaHarness(modelOverride))
 	case "heuristic":
 		return &AutoHarness{harnesses: []Harness{NewHeuristicHarness()}}
 	}
 
 	// Add other supported CLI harnesses in order of preference
-	candidates = append(candidates,
+	rawCandidates = append(rawCandidates,
 		NewAgyHarness(modelOverride),
 		NewClaudeHarness(modelOverride),
 		NewPiHarness(modelOverride),
 		NewOllamaHarness(modelOverride),
 		NewHeuristicHarness(),
 	)
+
+	seen := make(map[string]bool)
+	var candidates []Harness
+	for _, c := range rawCandidates {
+		name := c.Name()
+		if !seen[name] {
+			seen[name] = true
+			candidates = append(candidates, c)
+		}
+	}
 
 	return &AutoHarness{harnesses: candidates}
 }
