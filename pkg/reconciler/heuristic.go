@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/watcher"
 )
 
@@ -84,15 +85,10 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 		cardType = card.TypeProcedure
 	}
 
-	// Determine concise title
-	title := fmt.Sprintf("Snippet from Turn %d", turn.ID)
-	lines := strings.Split(strings.TrimSpace(turn.User), "\n")
-	if len(lines) > 0 && lines[0] != "" {
-		firstLine := strings.TrimSpace(lines[0])
-		if len(firstLine) > 30 {
-			firstLine = firstLine[:27] + "..."
-		}
-		title = firstLine
+	// Determine initial concise title using smart heuristic extraction
+	title, _ := harness.NewHeuristicHarness().Summarize(ctx, turn.User, turn.Assistant)
+	if title == "" {
+		title = fmt.Sprintf("Turn #%d", turn.ID)
 	}
 
 	var contentBuilder strings.Builder

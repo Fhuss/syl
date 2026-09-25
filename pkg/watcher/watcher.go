@@ -117,6 +117,7 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 					User:      pendingUser,
 					Assistant: rec.Content,
 					Timestamp: time.Now(),
+					IsCatchUp: isCatchingUp,
 				}
 				pendingUser = ""
 

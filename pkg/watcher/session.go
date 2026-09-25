@@ -56,6 +56,9 @@ func ListSessions(limit int) ([]SessionInfo, error) {
 		}
 
 		title := extractSessionTitle(m)
+		if strings.HasPrefix(title, "Return ONLY a 2 to 4 word") || strings.Contains(title, "describing the topic") {
+			continue
+		}
 
 		sessions = append(sessions, SessionInfo{
 			ID:      sessionID,

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/watcher"
 )
@@ -36,6 +37,12 @@ type TurnReceivedMsg struct {
 
 type MutationsAppliedMsg struct {
 	Mutations []reconciler.Mutation
+	Turn      *watcher.Turn
+}
+
+type TitleSummarizedMsg struct {
+	CardID string
+	Title  string
 }
 
 type ReconcileFailedMsg struct {
@@ -54,6 +61,7 @@ type Button struct {
 type Model struct {
 	store         *card.Store
 	reconciler    reconciler.Reconciler
+	harness       harness.Harness
 	turnCh        chan *watcher.Turn
 	activityCh    chan watcher.AgentActivity
 	selectedIndex int
@@ -74,7 +82,7 @@ type Model struct {
 	agentPrompt   string
 }
 
-func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
+func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(80),
@@ -89,6 +97,7 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 	m := &Model{
 		store:         store,
 		reconciler:    rec,
+		harness:       h,
 		turnCh:        turnCh,
 		activityCh:    activityCh,
 		selectedIndex: 0,
@@ -156,7 +165,7 @@ func (m *Model) applyReconcile(turn *watcher.Turn) tea.Cmd {
 		if err != nil {
 			return ReconcileFailedMsg{Err: err}
 		}
-		return MutationsAppliedMsg{Mutations: muts}
+		return MutationsAppliedMsg{Mutations: muts, Turn: turn}
 	}
 }
 
@@ -302,6 +311,25 @@ func (m *Model) actionDrop() tea.Cmd {
 	return nil
 }
 
+func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
+	return func() tea.Msg {
+		if m.harness == nil || turn == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		title, err := m.harness.Summarize(ctx, turn.User, turn.Assistant)
+		if err != nil || title == "" {
+			return nil
+		}
+		return TitleSummarizedMsg{
+			CardID: cardID,
+			Title:  title,
+		}
+	}
+}
+
 func (m *Model) getLeftColWidth() int {
 	if m.width <= 70 {
 		return 32
@@ -393,18 +421,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Content: mut.Content,
 				})
 				m.toast = fmt.Sprintf("Added: %s", mut.Title)
+				if msg.Turn != nil && !msg.Turn.IsCatchUp && m.harness != nil {
+					cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+				}
 			case reconciler.OpUpdate:
 				m.store.Update(mut.CardID, mut.Content, mut.Reason)
 				m.toast = fmt.Sprintf("Updated: %s", mut.Reason)
+				if msg.Turn != nil && !msg.Turn.IsCatchUp && m.harness != nil {
+					cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+				}
 			case reconciler.OpInvalidate:
 				m.store.Invalidate(mut.CardID, mut.Reason)
 				m.toast = fmt.Sprintf("Invalidated: %s", mut.Reason)
 			}
 		}
 		m.updateViewportContent()
-		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		cmds = append(cmds, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
-		})
+		}))
+		return m, tea.Batch(cmds...)
+
+	case TitleSummarizedMsg:
+		if m.store.UpdateTitle(msg.CardID, msg.Title) {
+			m.updateViewportContent()
+		}
+		return m, nil
 
 	case ReconcileFailedMsg:
 		m.reconciling = false

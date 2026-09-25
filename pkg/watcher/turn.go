@@ -8,6 +8,7 @@ type Turn struct {
 	User      string    `json:"user"`
 	Assistant string    `json:"assistant"`
 	Timestamp time.Time `json:"timestamp"`
+	IsCatchUp bool      `json:"is_catchup"`
 }
 
 // AgentActivity represents real-time execution state of the agent while a turn is in flight.

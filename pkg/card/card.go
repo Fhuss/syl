@@ -147,6 +147,19 @@ func (s *Store) TogglePin(id string) bool {
 	return c.Pinned
 }
 
+// UpdateTitle updates the title of a card in place without bumping its version.
+func (s *Store) UpdateTitle(id, newTitle string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	c, exists := s.cards[id]
+	if !exists {
+		return false
+	}
+	c.Title = newTitle
+	return true
+}
+
 // Remove deletes a card from the store.
 func (s *Store) Remove(id string) bool {
 	s.mu.Lock()

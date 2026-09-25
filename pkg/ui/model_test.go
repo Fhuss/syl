@@ -23,7 +23,7 @@ func TestModelDropAndPin(t *testing.T) {
 		Content: "docker run -d app",
 	})
 
-	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, false, "test-session")
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
 	m.width = 120
 	m.height = 30
 
@@ -56,7 +56,7 @@ func TestModelKeyDrop(t *testing.T) {
 		Title: "To be dropped",
 	})
 
-	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, false, "test-session")
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
 	m.width = 100
 	m.height = 30
 
@@ -89,5 +89,32 @@ func TestModelLeftColWidth(t *testing.T) {
 	m.width = 180
 	if w := m.getLeftColWidth(); w != 54 {
 		t.Errorf("expected width 54 for screen width 180, got %d", w)
+	}
+}
+
+func TestModelTitleSummarized(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:    "card-1",
+		Type:  card.TypeProcedure,
+		Title: "Old Raw Prompt Title",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 30
+
+	// Send TitleSummarizedMsg
+	_, _ = m.Update(TitleSummarizedMsg{
+		CardID: "card-1",
+		Title:  "Succinct AI Topic",
+	})
+
+	cards := store.List()
+	if len(cards) != 1 {
+		t.Fatalf("expected 1 card, got %d", len(cards))
+	}
+	if cards[0].Title != "Succinct AI Topic" {
+		t.Errorf("expected updated title 'Succinct AI Topic', got %q", cards[0].Title)
 	}
 }

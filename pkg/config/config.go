@@ -9,8 +9,15 @@ import (
 )
 
 type Config struct {
-	LLM     LLMConfig     `yaml:"llm"`
-	Watcher WatcherConfig `yaml:"watcher"`
+	LLM      LLMConfig      `yaml:"llm"`
+	Watcher  WatcherConfig  `yaml:"watcher"`
+	Subagent SubagentConfig `yaml:"subagent"`
+}
+
+type SubagentConfig struct {
+	Harness  string `yaml:"harness"`  // "auto" | "agy" | "claude" | "pi" | "ollama" | "heuristic"
+	Model    string `yaml:"model"`    // optional model override (e.g. for ollama or agy)
+	Disabled bool   `yaml:"disabled"` // disable background AI summarization
 }
 
 type LLMConfig struct {
@@ -39,6 +46,11 @@ func DefaultConfig() *Config {
 		},
 		Watcher: WatcherConfig{
 			TranscriptPath: "",
+		},
+		Subagent: SubagentConfig{
+			Harness:  "auto",
+			Model:    "",
+			Disabled: false,
 		},
 	}
 }

@@ -116,3 +116,24 @@ func TestCardNumbering(t *testing.T) {
 		t.Errorf("expected card 2 number to be 2, got %d", c2.Number)
 	}
 }
+
+func TestStoreUpdateTitle(t *testing.T) {
+	s := NewStore()
+	c1 := s.Add(&Card{ID: "c1", Title: "Original Title"})
+	if !s.UpdateTitle("c1", "Succinct AI Title") {
+		t.Fatalf("expected UpdateTitle to succeed")
+	}
+
+	got, _ := s.Get("c1")
+	if got.Title != "Succinct AI Title" {
+		t.Errorf("expected title 'Succinct AI Title', got %q", got.Title)
+	}
+	if got.Version != 1 {
+		t.Errorf("expected version to remain 1 after title update, got %d", got.Version)
+	}
+
+	if s.UpdateTitle("nonexistent", "Title") {
+		t.Errorf("expected UpdateTitle on nonexistent card to return false")
+	}
+	_ = c1
+}

@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/config"
+	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/ui"
 	"github.com/Fhuss/syl/pkg/watcher"
@@ -48,6 +49,7 @@ Flags:
   -f, --file string    Path to transcript.jsonl (auto-detected if omitted)
   -c, --config string  Path to config file (default ~/.config/syl/config.yaml)
   -p, --provider string LLM provider override (mock, openai, gemini)
+  --harness string     Subagent harness override (auto, agy, claude, pi, ollama, heuristic)
   -h, --help           Show this help message
 
 Keys in TUI:
@@ -68,6 +70,7 @@ Keys in TUI:
 		fileFlag     string
 		configFlag   string
 		providerFlag string
+		harnessFlag  string
 		showVersion  bool
 	)
 
@@ -79,6 +82,7 @@ Keys in TUI:
 	flag.StringVar(&configFlag, "c", "", "Path to config file (shorthand)")
 	flag.StringVar(&providerFlag, "provider", "", "LLM provider override (mock, openai, gemini)")
 	flag.StringVar(&providerFlag, "p", "", "LLM provider override (shorthand)")
+	flag.StringVar(&harnessFlag, "harness", "", "Subagent harness override (auto, agy, claude, pi, ollama, heuristic)")
 	flag.BoolVar(&showVersion, "version", false, "Print version")
 	flag.Parse()
 
@@ -201,7 +205,21 @@ Keys in TUI:
 		}
 	}
 
-	model := ui.NewModel(store, rec, turnCh, activityCh, isDemo, sessionLabel)
+	// Choose subagent harness
+	harnessChoice := cfg.Subagent.Harness
+	if harnessFlag != "" {
+		harnessChoice = harnessFlag
+	}
+	if harnessChoice == "" {
+		harnessChoice = "auto"
+	}
+
+	var subagentHarness harness.Harness
+	if !cfg.Subagent.Disabled {
+		subagentHarness = harness.NewAutoHarness(harnessChoice, cfg.Subagent.Model)
+	}
+
+	model := ui.NewModel(store, rec, subagentHarness, turnCh, activityCh, isDemo, sessionLabel)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {
