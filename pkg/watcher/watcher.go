@@ -1,0 +1,129 @@
+package watcher
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+)
+
+var userRequestRegex = regexp.MustCompile(`(?s)<USER_REQUEST>(.*?)</USER_REQUEST>`)
+
+// TranscriptRecord represents a single JSON line in an Antigravity/agent transcript.
+type TranscriptRecord struct {
+	StepIndex int    `json:"step_index"`
+	Source    string `json:"source"`
+	Type      string `json:"type"`
+	Status    string `json:"status"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+type FileWatcher struct {
+	path string
+}
+
+func NewFileWatcher(path string) *FileWatcher {
+	return &FileWatcher{path: path}
+}
+
+// Watch streams newly completed Turns from the transcript file until ctx is cancelled.
+func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn) error {
+	file, err := os.Open(w.path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	fsWatcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	defer fsWatcher.Close()
+
+	if err := fsWatcher.Add(w.path); err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(file)
+	var pendingUser string
+	turnCount := 0
+
+	processAvailableLines := func() {
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					// read error
+				}
+				break
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			var rec TranscriptRecord
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				continue
+			}
+
+			if rec.Type == "USER_INPUT" && rec.Content != "" {
+				userText := rec.Content
+				if matches := userRequestRegex.FindStringSubmatch(userText); len(matches) > 1 {
+					userText = strings.TrimSpace(matches[1])
+				}
+				pendingUser = userText
+			} else if rec.Type == "PLANNER_RESPONSE" && rec.Content != "" && pendingUser != "" {
+				turnCount++
+				t := &Turn{
+					ID:        turnCount,
+					User:      pendingUser,
+					Assistant: rec.Content,
+					Timestamp: time.Now(),
+				}
+				pendingUser = ""
+
+				select {
+				case turnCh <- t:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+
+	// Initial catch-up on existing content
+	processAvailableLines()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-fsWatcher.Events:
+			if !ok {
+				return nil
+			}
+			if event.Has(fsnotify.Write) {
+				processAvailableLines()
+			}
+		case <-ticker.C:
+			// Fallback poll in case fsnotify misses an append
+			processAvailableLines()
+		case err, ok := <-fsWatcher.Errors:
+			if !ok {
+				return nil
+			}
+			_ = err
+		}
+	}
+}

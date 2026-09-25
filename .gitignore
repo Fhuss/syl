@@ -1,0 +1,21 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+
+# Go workspace
+go.work
+
+# OS & Editor files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
