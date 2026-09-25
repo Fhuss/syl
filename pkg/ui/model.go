@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -42,6 +43,13 @@ type ReconcileFailedMsg struct {
 
 type ClearToastMsg struct{}
 
+type Button struct {
+	Label  string
+	Action string
+	X1     int
+	X2     int
+}
+
 type Model struct {
 	store         *card.Store
 	reconciler    reconciler.Reconciler
@@ -55,6 +63,8 @@ type Model struct {
 	toast         string
 	reconciling   bool
 	renderer      *glamour.TermRenderer
+	viewport      viewport.Model
+	buttons       []Button
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, isDemo bool) *Model {
@@ -63,7 +73,9 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 		glamour.WithWordWrap(80),
 	)
 
-	return &Model{
+	vp := viewport.New(80, 20)
+
+	m := &Model{
 		store:         store,
 		reconciler:    rec,
 		turnCh:        turnCh,
@@ -72,14 +84,17 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 		isDemo:        isDemo,
 		demoStep:      0,
 		renderer:      r,
+		viewport:      vp,
+		buttons:       make([]Button, 0),
 	}
+
+	return m
 }
 
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
 
 	if m.isDemo {
-		// Auto-advance first step in demo
 		cmds = append(cmds, m.advanceDemo())
 	} else if m.turnCh != nil {
 		cmds = append(cmds, m.listenForTurns())
@@ -138,12 +153,123 @@ func (m *Model) advanceDemo() tea.Cmd {
 	return m.applyReconcile(turn)
 }
 
+func (m *Model) updateViewportContent() {
+	cards := m.store.List()
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		m.viewport.SetContent("No card selected.")
+		return
+	}
+
+	selected := cards[m.selectedIndex]
+	if m.viewMode == ModeHistory {
+		var b strings.Builder
+		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Revision History: " + selected.Title + "\n\n"))
+		for _, h := range selected.History {
+			entry := fmt.Sprintf("• Version %d [%s]:\n  Reason: %s\n\n",
+				h.Version, h.UpdatedAt.Format("15:04:05"), h.Reason)
+			b.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Render(entry))
+		}
+		m.viewport.SetContent(b.String())
+	} else {
+		rendered, err := m.renderer.Render(selected.Content)
+		if err != nil {
+			rendered = selected.Content
+		}
+		m.viewport.SetContent(rendered)
+	}
+	m.viewport.GotoTop()
+}
+
+func (m *Model) actionYank() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		c := cards[m.selectedIndex]
+		snippet := c.Content
+		if matches := codeFenceRegex.FindStringSubmatch(c.Content); len(matches) > 1 {
+			snippet = strings.TrimSpace(matches[1])
+		}
+		if err := clipboard.WriteAll(snippet); err == nil {
+			m.toast = "✓ Snippet yanked to clipboard!"
+		} else {
+			m.toast = "Failed to copy to clipboard"
+		}
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+	return nil
+}
+
+func (m *Model) actionPin() {
+	cards := m.store.List()
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		pinned := m.store.TogglePin(cards[m.selectedIndex].ID)
+		if pinned {
+			m.toast = "📌 Pinned card"
+		} else {
+			m.toast = "Unpinned card"
+		}
+		m.updateViewportContent()
+	}
+}
+
+func (m *Model) actionToggleHistory() {
+	if m.viewMode == ModeHistory {
+		m.viewMode = ModeSplit
+	} else {
+		m.viewMode = ModeHistory
+	}
+	m.updateViewportContent()
+}
+
+func (m *Model) actionSend() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		c := cards[m.selectedIndex]
+		textToSend := fmt.Sprintf("[Ref: %s (v%d)]\n%s", c.Title, c.Version, c.Content)
+		if err := exec.Command("cmux", "send", textToSend).Run(); err == nil {
+			m.toast = "✓ Sent card to active chat surface!"
+		} else {
+			_ = clipboard.WriteAll(textToSend)
+			m.toast = "✓ Copied context to clipboard!"
+		}
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+	return nil
+}
+
+func (m *Model) handleButtonAction(action string) tea.Cmd {
+	switch action {
+	case "yank":
+		return m.actionYank()
+	case "pin":
+		m.actionPin()
+	case "history":
+		m.actionToggleHistory()
+	case "send":
+		return m.actionSend()
+	case "demo_next":
+		if m.isDemo && m.demoStep < 3 {
+			return m.advanceDemo()
+		}
+		m.toast = "Demo finished! All turns demonstrated."
+	case "quit":
+		return tea.Quit
+	}
+	return nil
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		wrapWidth := msg.Width / 2
+
+		wrapWidth := msg.Width - 40
 		if wrapWidth < 40 {
 			wrapWidth = 40
 		}
@@ -151,6 +277,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(wrapWidth),
 		)
+
+		vpHeight := msg.Height - 4
+		if vpHeight < 5 {
+			vpHeight = 5
+		}
+		m.viewport.Width = wrapWidth
+		m.viewport.Height = vpHeight
+		m.updateViewportContent()
 		return m, nil
 
 	case TurnReceivedMsg:
@@ -177,6 +311,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toast = fmt.Sprintf("Invalidated: %s", mut.Reason)
 			}
 		}
+		m.updateViewportContent()
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
 		})
@@ -190,6 +325,60 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toast = ""
 		return m, nil
 
+	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress {
+			if msg.Button == tea.MouseButtonLeft {
+				// 1. Check Action Bar clicks (Row 1)
+				if msg.Y == 1 {
+					for _, btn := range m.buttons {
+						if msg.X >= btn.X1 && msg.X <= btn.X2 {
+							cmd := m.handleButtonAction(btn.Action)
+							return m, cmd
+						}
+					}
+				}
+
+				// 2. Check Card List clicks (Row >= 2, X <= 36)
+				if msg.Y >= 2 && msg.X <= 36 {
+					cardIdx := msg.Y - 2
+					cards := m.store.List()
+					if cardIdx >= 0 && cardIdx < len(cards) {
+						if m.selectedIndex == cardIdx {
+							// Toggle view mode on repeat click
+							if m.viewMode == ModeDetail {
+								m.viewMode = ModeSplit
+							} else {
+								m.viewMode = ModeDetail
+							}
+						} else {
+							m.selectedIndex = cardIdx
+						}
+						m.updateViewportContent()
+					}
+				}
+			} else if msg.Button == tea.MouseButtonWheelUp {
+				if msg.X <= 36 {
+					if m.selectedIndex > 0 {
+						m.selectedIndex--
+						m.updateViewportContent()
+					}
+				} else {
+					m.viewport.LineUp(3)
+				}
+			} else if msg.Button == tea.MouseButtonWheelDown {
+				if msg.X <= 36 {
+					cards := m.store.List()
+					if m.selectedIndex < len(cards)-1 {
+						m.selectedIndex++
+						m.updateViewportContent()
+					}
+				} else {
+					m.viewport.LineDown(3)
+				}
+			}
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -198,12 +387,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.selectedIndex > 0 {
 				m.selectedIndex--
+				m.updateViewportContent()
 			}
 
 		case "down", "j":
 			cards := m.store.List()
 			if m.selectedIndex < len(cards)-1 {
 				m.selectedIndex++
+				m.updateViewportContent()
 			}
 
 		case "enter":
@@ -214,58 +405,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "h":
-			if m.viewMode == ModeHistory {
-				m.viewMode = ModeSplit
-			} else {
-				m.viewMode = ModeHistory
-			}
+			m.actionToggleHistory()
 
 		case "p":
-			cards := m.store.List()
-			if len(cards) > 0 && m.selectedIndex < len(cards) {
-				pinned := m.store.TogglePin(cards[m.selectedIndex].ID)
-				if pinned {
-					m.toast = "📌 Pinned card"
-				} else {
-					m.toast = "Unpinned card"
-				}
-			}
+			m.actionPin()
 
 		case "y":
-			// Yank active card content or primary code block to clipboard
-			cards := m.store.List()
-			if len(cards) > 0 && m.selectedIndex < len(cards) {
-				c := cards[m.selectedIndex]
-				snippet := c.Content
-				if matches := codeFenceRegex.FindStringSubmatch(c.Content); len(matches) > 1 {
-					snippet = strings.TrimSpace(matches[1])
-				}
-				if err := clipboard.WriteAll(snippet); err == nil {
-					m.toast = "✓ Snippet yanked to clipboard!"
-				} else {
-					m.toast = "Failed to copy to clipboard"
-				}
-				return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-					return ClearToastMsg{}
-				})
-			}
+			return m, m.actionYank()
 
 		case "s":
-			// Send to chat via cmux if available, else copy to clipboard
-			cards := m.store.List()
-			if len(cards) > 0 && m.selectedIndex < len(cards) {
-				c := cards[m.selectedIndex]
-				textToSend := fmt.Sprintf("[Ref: %s (v%d)]\n%s", c.Title, c.Version, c.Content)
-				if err := exec.Command("cmux", "send", textToSend).Run(); err == nil {
-					m.toast = "✓ Sent card to active chat surface!"
-				} else {
-					_ = clipboard.WriteAll(textToSend)
-					m.toast = "✓ Copied context to clipboard!"
-				}
-				return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-					return ClearToastMsg{}
-				})
-			}
+			return m, m.actionSend()
 
 		case "d", " ":
 			if m.isDemo {
@@ -277,7 +426,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	// Update viewport with key/wheel events
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	cmds = append(cmds, vpCmd)
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) renderActionBar() string {
+	var b strings.Builder
+	m.buttons = make([]Button, 0)
+	currX := 1
+
+	addButton := func(label, action string, style lipgloss.Style) {
+		rendered := style.Render(label)
+		width := lipgloss.Width(rendered)
+		m.buttons = append(m.buttons, Button{
+			Label:  label,
+			Action: action,
+			X1:     currX,
+			X2:     currX + width,
+		})
+		b.WriteString(rendered)
+		b.WriteString(" ")
+		currX += width + 1
+	}
+
+	addButton("📋 Yank (y)", "yank", BtnStyle)
+	addButton("📌 Pin (p)", "pin", BtnStyle)
+	if m.viewMode == ModeHistory {
+		addButton("📜 History (h)", "history", BtnHoverStyle)
+	} else {
+		addButton("📜 History (h)", "history", BtnStyle)
+	}
+	addButton("🚀 Send (s)", "send", BtnStyle)
+	if m.isDemo {
+		addButton("⏩ Next Turn (Space)", "demo_next", BtnHoverStyle)
+	}
+	addButton("✕ Quit (q)", "quit", BtnDangerStyle)
+
+	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
 }
 
 func (m *Model) View() string {
@@ -307,10 +496,13 @@ func (m *Model) View() string {
 	}
 	header := headerLeft + strings.Repeat(" ", gap) + headerRight
 
-	// 2. Body
+	// 2. Action Bar (Clickable pills)
+	actionBar := m.renderActionBar()
+
+	// 3. Body
 	var body string
 	if len(cards) == 0 {
-		emptyMsg := "No reference cards captured yet.\nStart chatting in your AI assistant or run 'syl demo' to preview."
+		emptyMsg := "No reference cards captured yet.\nStart chatting in your AI assistant or click [Next Turn] to preview."
 		body = lipgloss.NewStyle().
 			Padding(2, 2).
 			Foreground(ColorMuted).
@@ -319,16 +511,10 @@ func (m *Model) View() string {
 		body = m.renderCardsAndDetail(cards)
 	}
 
-	// 3. Footer
-	var hints string
-	if m.isDemo {
-		hints = "[Space/d] Next Turn  [Enter] Fullscreen  [y] Yank  [p] Pin  [h] History  [s] Send  [q] Quit"
-	} else {
-		hints = "[↑/↓ j/k] Navigate  [Enter] Fullscreen  [y] Yank  [p] Pin  [h] History  [s] Send  [q] Quit"
-	}
-	footer := FooterStyle.Render(hints)
+	// 4. Footer
+	hints := FooterStyle.Render("💡 Click any card or action button • Scroll with mouse wheel or trackpad")
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, header, actionBar, body, hints)
 }
 
 func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
@@ -357,8 +543,8 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 		}
 
 		title := c.Title
-		if len(title) > 28 {
-			title = title[:25] + "..."
+		if len(title) > 24 {
+			title = title[:21] + "..."
 		}
 
 		ver := fmt.Sprintf("v%d", c.Version)
@@ -373,30 +559,6 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 	}
 	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftLines...)
 
-	// Right column: Selected Card Detail or History
-	var rightPane string
-	if m.selectedIndex < len(cards) {
-		selected := cards[m.selectedIndex]
-
-		if m.viewMode == ModeHistory {
-			// Show revision history
-			var historyLines []string
-			historyLines = append(historyLines, lipgloss.NewStyle().Bold(true).Render("Revision History: "+selected.Title))
-			for _, h := range selected.History {
-				entry := fmt.Sprintf("v%d: %s\n(%s)", h.Version, h.Reason, h.UpdatedAt.Format("15:04:05"))
-				historyLines = append(historyLines, lipgloss.NewStyle().Foreground(ColorPrimary).Render(entry))
-			}
-			rightPane = lipgloss.JoinVertical(lipgloss.Left, historyLines...)
-		} else {
-			// Show rendered markdown content
-			rendered, err := m.renderer.Render(selected.Content)
-			if err != nil {
-				rendered = selected.Content
-			}
-			rightPane = rendered
-		}
-	}
-
 	leftStyle := lipgloss.NewStyle().
 		Width(36).
 		Border(lipgloss.NormalBorder(), false, true, false, false).
@@ -406,5 +568,5 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 	rightStyle := lipgloss.NewStyle().
 		Padding(0, 1)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftStyle.Render(leftPane), rightStyle.Render(rightPane))
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftStyle.Render(leftPane), rightStyle.Render(m.viewport.View()))
 }

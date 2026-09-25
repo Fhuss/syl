@@ -89,4 +89,21 @@ var (
 			Bold(true).
 			Foreground(ColorSuccess).
 			Padding(0, 1)
+
+	// Clickable buttons
+	BtnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ECEFF4")).
+			Background(lipgloss.Color("#3B4252")).
+			Padding(0, 1)
+
+	BtnHoverStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#000000")).
+			Background(ColorPrimary).
+			Bold(true).
+			Padding(0, 1)
+
+	BtnDangerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#BF616A")).
+			Padding(0, 1)
 )
