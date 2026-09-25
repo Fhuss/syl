@@ -73,23 +73,58 @@ func (s *Store) Add(c *Card) *Card {
 		c.CreatedAt = now
 	}
 	c.UpdatedAt = now
-	c.Version = 1
-	c.Status = StatusActive
-	s.counter++
-	if c.Number == 0 {
+	if c.Version == 0 {
+		c.Version = 1
+	}
+	if c.Status == "" {
+		c.Status = StatusActive
+	}
+
+	if c.Number > s.counter {
+		s.counter = c.Number
+	} else if c.Number == 0 {
+		s.counter++
 		c.Number = s.counter
 	}
-	c.History = []CardVersion{
-		{
-			Version:   1,
-			Content:   c.Content,
-			Reason:    "Initial extraction",
-			UpdatedAt: now,
-		},
+
+	if len(c.History) == 0 {
+		c.History = []CardVersion{
+			{
+				Version:   c.Version,
+				Content:   c.Content,
+				Reason:    "Initial extraction",
+				UpdatedAt: now,
+			},
+		}
+	}
+
+	// Ensure card has an ID and it doesn't collide with existing cards
+	if c.ID == "" {
+		c.ID = fmt.Sprintf("card-%d", c.Number)
+	}
+	origID := c.ID
+	collisionCount := 0
+	for {
+		if _, exists := s.cards[c.ID]; !exists {
+			break
+		}
+		collisionCount++
+		c.ID = fmt.Sprintf("%s-%d", origID, collisionCount)
 	}
 
 	s.cards[c.ID] = c
-	s.order = append(s.order, c.ID)
+
+	alreadyInOrder := false
+	for _, id := range s.order {
+		if id == c.ID {
+			alreadyInOrder = true
+			break
+		}
+	}
+	if !alreadyInOrder {
+		s.order = append(s.order, c.ID)
+	}
+
 	return c
 }
 

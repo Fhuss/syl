@@ -249,3 +249,37 @@ func TestStoreSnapshotPersistence(t *testing.T) {
 	_ = c1
 }
 
+func TestStoreAddCollisionHandling(t *testing.T) {
+	s := NewStore()
+
+	// Add first card
+	c1 := s.Add(&Card{
+		ID:    "card-1",
+		Title: "First Card",
+	})
+	if c1.Number != 1 {
+		t.Errorf("expected card 1 number to be 1, got %d", c1.Number)
+	}
+
+	// Add second card with the SAME ID "card-1" (simulating a clash)
+	c2 := s.Add(&Card{
+		ID:    "card-1",
+		Title: "Second Card with colliding ID",
+	})
+
+	if c2.ID == c1.ID {
+		t.Errorf("expected c2 ID to be disambiguated, got same ID %s", c2.ID)
+	}
+	if c2.Number != 2 {
+		t.Errorf("expected c2 number to be 2, got %d", c2.Number)
+	}
+
+	cards := s.List()
+	if len(cards) != 2 {
+		t.Fatalf("expected 2 distinct cards in store, got %d", len(cards))
+	}
+	if cards[0].Title != "First Card" || cards[1].Title != "Second Card with colliding ID" {
+		t.Errorf("expected both cards preserved in order, got: %v, %v", cards[0].Title, cards[1].Title)
+	}
+}
+

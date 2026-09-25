@@ -117,8 +117,22 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 	}
 
 	// 4. If no existing card matches, create a genuine new reference card
-	h.counter++
-	cardID := fmt.Sprintf("card-%d", h.counter)
+	var cardID string
+	for {
+		h.counter++
+		candidate := fmt.Sprintf("card-%d", h.counter)
+		exists := false
+		for _, c := range currentCards {
+			if c.ID == candidate {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			cardID = candidate
+			break
+		}
+	}
 	cardType := card.TypeCommand
 	if len(matches) > 1 || hasSteps {
 		cardType = card.TypeProcedure

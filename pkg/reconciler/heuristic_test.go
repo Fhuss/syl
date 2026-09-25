@@ -163,3 +163,44 @@ func TestHeuristicIndependentTurnsInSameLanguage(t *testing.T) {
 	}
 }
 
+func TestHeuristicCardIDNoCollisionOnRestart(t *testing.T) {
+	// Simulate starting a fresh HeuristicReconciler on a session that already has 2 saved cards: card-1 and card-2
+	freshReconciler := NewHeuristicReconciler()
+	ctx := context.Background()
+
+	currentCards := []*card.Card{
+		{
+			ID:      "card-1",
+			Title:   "First Restored Card",
+			Content: "```bash\necho step 1\n```",
+		},
+		{
+			ID:      "card-2",
+			Title:   "Second Restored Card",
+			Content: "```bash\necho step 2\n```",
+		},
+	}
+
+	newTurn := &watcher.Turn{
+		ID:        3,
+		User:      "How do I install postgres?",
+		Assistant: "Run:\n```bash\nbrew install postgresql\n```",
+	}
+
+	muts, err := freshReconciler.Reconcile(ctx, currentCards, newTurn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(muts) != 1 || muts[0].Op != OpAdd {
+		t.Fatalf("expected 1 OpAdd mutation, got %v", muts)
+	}
+
+	// Must NOT collide with card-1 or card-2!
+	if muts[0].CardID == "card-1" || muts[0].CardID == "card-2" {
+		t.Errorf("expected fresh reconciler to generate non-colliding ID, but got %s", muts[0].CardID)
+	}
+	if muts[0].CardID != "card-3" {
+		t.Errorf("expected CardID 'card-3', got %s", muts[0].CardID)
+	}
+}
+
