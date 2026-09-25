@@ -13,9 +13,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jakobhuss/syl/pkg/card"
-	"github.com/jakobhuss/syl/pkg/reconciler"
-	"github.com/jakobhuss/syl/pkg/watcher"
+	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/reconciler"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 var codeFenceRegex = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9_-]+)?\n(.*?)\n```")

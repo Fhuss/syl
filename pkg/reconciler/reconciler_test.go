@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jakobhuss/syl/pkg/watcher"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 func TestMockReconcilerMultiTurn(t *testing.T) {

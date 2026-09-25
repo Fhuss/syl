@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jakobhuss/syl/pkg/card"
-	"github.com/jakobhuss/syl/pkg/watcher"
+	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 var (

@@ -9,11 +9,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/jakobhuss/syl/pkg/card"
-	"github.com/jakobhuss/syl/pkg/config"
-	"github.com/jakobhuss/syl/pkg/reconciler"
-	"github.com/jakobhuss/syl/pkg/ui"
-	"github.com/jakobhuss/syl/pkg/watcher"
+	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/config"
+	"github.com/Fhuss/syl/pkg/reconciler"
+	"github.com/Fhuss/syl/pkg/ui"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 const version = "0.1.0"

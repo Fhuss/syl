@@ -1,4 +1,4 @@
-module github.com/jakobhuss/syl
+module github.com/Fhuss/syl
 
 go 1.24.2
 
