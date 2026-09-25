@@ -41,8 +41,7 @@ var (
 
 	// Card item styles
 	CardItemStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Border(lipgloss.NormalBorder(), false, false, false, false)
+			Padding(0, 1)
 
 	CardSelectedStyle = lipgloss.NewStyle().
 				Padding(0, 1).
@@ -106,4 +105,11 @@ var (
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Background(lipgloss.Color("#BF616A")).
 			Padding(0, 1)
+
+	BadgeNumberStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#88C0D0")).
+			Bold(true)
+
+	BadgeVersionStyle = lipgloss.NewStyle().
+			Foreground(ColorMuted)
 )

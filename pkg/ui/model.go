@@ -238,7 +238,7 @@ func (m *Model) actionCopy() tea.Cmd {
 	return nil
 }
 
-func (m *Model) actionPin() {
+func (m *Model) actionPin() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		pinned := m.store.TogglePin(cards[m.selectedIndex].ID)
@@ -248,7 +248,11 @@ func (m *Model) actionPin() {
 			m.toast = "Unpinned card"
 		}
 		m.updateViewportContent()
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
 	}
+	return nil
 }
 
 func (m *Model) actionToggleHistory() {
@@ -278,12 +282,47 @@ func (m *Model) actionSend() tea.Cmd {
 	return nil
 }
 
+func (m *Model) actionDrop() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) > 0 && m.selectedIndex < len(cards) {
+		c := cards[m.selectedIndex]
+		m.store.Remove(c.ID)
+		m.toast = fmt.Sprintf("✓ Dropped card #%d", c.Number)
+		newCards := m.store.List()
+		if len(newCards) == 0 {
+			m.selectedIndex = 0
+		} else if m.selectedIndex >= len(newCards) {
+			m.selectedIndex = len(newCards) - 1
+		}
+		m.updateViewportContent()
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+	return nil
+}
+
+func (m *Model) getLeftColWidth() int {
+	if m.width <= 70 {
+		return 32
+	}
+	if m.width <= 100 {
+		return 42
+	}
+	if m.width <= 140 {
+		return 48
+	}
+	return 54
+}
+
 func (m *Model) handleButtonAction(action string) tea.Cmd {
 	switch action {
 	case "copy":
 		return m.actionCopy()
 	case "pin":
-		m.actionPin()
+		return m.actionPin()
+	case "drop":
+		return m.actionDrop()
 	case "history":
 		m.actionToggleHistory()
 	case "send":
@@ -307,16 +346,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		wrapWidth := msg.Width - 40
-		if wrapWidth < 40 {
-			wrapWidth = 40
+		leftColWidth := m.getLeftColWidth()
+		wrapWidth := msg.Width - leftColWidth - 4
+		if wrapWidth < 25 {
+			wrapWidth = 25
 		}
 		m.renderer, _ = glamour.NewTermRenderer(
 			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(wrapWidth),
 		)
 
-		vpHeight := msg.Height - 4
+		vpHeight := msg.Height - 5
 		if vpHeight < 5 {
 			vpHeight = 5
 		}
@@ -377,6 +417,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
 	case tea.MouseMsg:
+		leftColWidth := m.getLeftColWidth()
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonLeft {
 				// 1. Check Action Bar clicks (Row 1)
@@ -389,8 +430,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				// 2. Check Card List clicks (Row >= 2, X <= 36)
-				if msg.Y >= 2 && msg.X <= 36 {
+				// 2. Check Card List clicks (Row >= 2, X <= leftColWidth)
+				if msg.Y >= 2 && msg.X <= leftColWidth {
 					cardIdx := msg.Y - 2
 					cards := m.store.List()
 					if cardIdx >= 0 && cardIdx < len(cards) {
@@ -408,7 +449,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			} else if msg.Button == tea.MouseButtonWheelUp {
-				if msg.X <= 36 {
+				if msg.X <= leftColWidth {
 					if m.selectedIndex > 0 {
 						m.selectedIndex--
 						m.updateViewportContent()
@@ -417,7 +458,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewport.LineUp(3)
 				}
 			} else if msg.Button == tea.MouseButtonWheelDown {
-				if msg.X <= 36 {
+				if msg.X <= leftColWidth {
 					cards := m.store.List()
 					if m.selectedIndex < len(cards)-1 {
 						m.selectedIndex++
@@ -458,7 +499,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionToggleHistory()
 
 		case "p":
-			m.actionPin()
+			return m, m.actionPin()
 
 		case "c", "y":
 			return m, m.actionCopy()
@@ -466,7 +507,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			return m, m.actionSend()
 
-		case "d", " ":
+		case "x", "backspace", "delete":
+			return m, m.actionDrop()
+
+		case "d":
+			if m.isDemo {
+				if m.demoStep < 3 {
+					return m, m.advanceDemo()
+				}
+				m.toast = "Demo finished! All 3 scenario turns demonstrated."
+			} else {
+				return m, m.actionDrop()
+			}
+
+		case " ":
 			if m.isDemo {
 				if m.demoStep < 3 {
 					return m, m.advanceDemo()
@@ -505,6 +559,7 @@ func (m *Model) renderActionBar() string {
 
 	addButton("📋 Copy (c)", "copy", BtnStyle)
 	addButton("📌 Pin (p)", "pin", BtnStyle)
+	addButton("🗑 Drop (x)", "drop", BtnStyle)
 	if m.viewMode == ModeHistory {
 		addButton("📜 History (h)", "history", BtnHoverStyle)
 	} else {
@@ -585,44 +640,78 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
-	// Left column: list of cards
+	leftColWidth := m.getLeftColWidth()
+	rowWidth := leftColWidth - 1 // Leave 1 col for right vertical border
+	if rowWidth < 20 {
+		rowWidth = 20
+	}
+	innerWidth := rowWidth - 2 // CardItemStyle has Padding(0, 1)
+	if innerWidth < 16 {
+		innerWidth = 16
+	}
+
 	leftLines := make([]string, 0, len(cards)+1)
 	for i, c := range cards {
-		var badge string
+		var badge lipgloss.Style
 		switch c.Type {
 		case card.TypeProcedure:
-			badge = BadgeProc.Render()
+			badge = BadgeProc
 		case card.TypeCommand:
-			badge = BadgeCmd.Render()
+			badge = BadgeCmd
 		case card.TypeDecision:
-			badge = BadgeDec.Render()
+			badge = BadgeDec
 		default:
-			badge = BadgeInfo.Render()
+			badge = BadgeInfo
 		}
 
 		if c.Status == card.StatusInvalidated {
-			badge = BadgeInvalid.Render()
+			badge = BadgeInvalid
 		}
 
+		prefix := "  "
+		if i == m.selectedIndex {
+			prefix = "▸ "
+		}
+
+		numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%-2d", c.Number))
+		badgeStr := badge.Render()
 		pinIcon := ""
 		if c.Pinned {
 			pinIcon = "📌 "
 		}
+		verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", c.Version))
+
+		// Calculate available width for the title so the row NEVER wraps
+		fixedWidth := lipgloss.Width(prefix) + lipgloss.Width(numStr) + 1 + lipgloss.Width(badgeStr) + 1 + lipgloss.Width(pinIcon) + 1 + lipgloss.Width(verStr)
+		availTitle := innerWidth - fixedWidth
+		if availTitle < 6 {
+			availTitle = 6
+		}
 
 		title := c.Title
-		if len(title) > 24 {
-			title = title[:21] + "..."
+		runes := []rune(title)
+		if len(runes) > availTitle {
+			if availTitle > 3 {
+				title = string(runes[:availTitle-3]) + "..."
+			} else {
+				title = string(runes[:availTitle])
+			}
 		}
 
-		ver := fmt.Sprintf("v%d", c.Version)
-		line := fmt.Sprintf("%s %s%s (%s)", badge, pinIcon, title, ver)
+		leftPart := fmt.Sprintf("%s%s %s %s%s", prefix, numStr, badgeStr, pinIcon, title)
+		gap := innerWidth - lipgloss.Width(leftPart) - lipgloss.Width(verStr)
+		if gap < 1 {
+			gap = 1
+		}
+		lineContent := leftPart + strings.Repeat(" ", gap) + verStr
 
+		var renderedRow string
 		if i == m.selectedIndex {
-			line = CardSelectedStyle.Render("▸ " + line)
+			renderedRow = CardSelectedStyle.Width(rowWidth).Render(lineContent)
 		} else {
-			line = CardItemStyle.Render("  " + line)
+			renderedRow = CardItemStyle.Width(rowWidth).Render(lineContent)
 		}
-		leftLines = append(leftLines, line)
+		leftLines = append(leftLines, renderedRow)
 	}
 
 	// Add dynamic loading state card when agent is busy
@@ -635,25 +724,45 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 			SetString("EXEC")
 
 		pendingTitle := m.agentPrompt
-		if len(pendingTitle) > 18 {
-			pendingTitle = pendingTitle[:15] + "..."
-		}
 		if pendingTitle == "" {
 			pendingTitle = "Thinking..."
 		}
 
-		pendingLine := lipgloss.NewStyle().
+		prefix := "  "
+		fixedWidth := lipgloss.Width(prefix) + lipgloss.Width(execBadge.Render()) + 1 + lipgloss.Width(m.spinner.View()) + 1
+		availTitle := innerWidth - fixedWidth
+		if availTitle < 6 {
+			availTitle = 6
+		}
+
+		pRunes := []rune(pendingTitle)
+		if len(pRunes) > availTitle {
+			if availTitle > 3 {
+				pendingTitle = string(pRunes[:availTitle-3]) + "..."
+			} else {
+				pendingTitle = string(pRunes[:availTitle])
+			}
+		}
+
+		pendingLine := fmt.Sprintf("%s%s %s %s", prefix, execBadge.Render(), m.spinner.View(), pendingTitle)
+		renderedPending := lipgloss.NewStyle().
 			Foreground(ColorWarning).
-			Render(fmt.Sprintf("  %s %s %s", execBadge, m.spinner.View(), pendingTitle))
-		leftLines = append(leftLines, pendingLine)
+			Width(rowWidth).
+			Padding(0, 1).
+			Render(pendingLine)
+		leftLines = append(leftLines, renderedPending)
 	}
+
 	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftLines...)
 
 	leftStyle := lipgloss.NewStyle().
-		Width(36).
+		Width(leftColWidth).
 		Border(lipgloss.NormalBorder(), false, true, false, false).
-		BorderForeground(ColorMuted).
-		Padding(0, 1)
+		BorderForeground(ColorMuted)
+
+	if m.viewport.Height > 0 {
+		leftStyle = leftStyle.Height(m.viewport.Height)
+	}
 
 	rightStyle := lipgloss.NewStyle().
 		Padding(0, 1)

@@ -37,6 +37,7 @@ type Card struct {
 	Content   string        `json:"content"`
 	Status    CardStatus    `json:"status"`
 	Version   int           `json:"version"`
+	Number    int           `json:"number"`
 	Pinned    bool          `json:"pinned"`
 	History   []CardVersion `json:"history"`
 	CreatedAt time.Time     `json:"created_at"`
@@ -44,9 +45,10 @@ type Card struct {
 }
 
 type Store struct {
-	mu    sync.RWMutex
-	cards map[string]*Card
-	order []string // preserve insertion order
+	mu      sync.RWMutex
+	cards   map[string]*Card
+	order   []string // preserve insertion order
+	counter int
 }
 
 func NewStore() *Store {
@@ -68,6 +70,10 @@ func (s *Store) Add(c *Card) *Card {
 	c.UpdatedAt = now
 	c.Version = 1
 	c.Status = StatusActive
+	s.counter++
+	if c.Number == 0 {
+		c.Number = s.counter
+	}
 	c.History = []CardVersion{
 		{
 			Version:   1,
@@ -141,9 +147,29 @@ func (s *Store) TogglePin(id string) bool {
 	return c.Pinned
 }
 
+// Remove deletes a card from the store.
+func (s *Store) Remove(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.cards[id]; !exists {
+		return false
+	}
+	delete(s.cards, id)
+
+	newOrder := make([]string, 0, len(s.order)-1)
+	for _, oid := range s.order {
+		if oid != id {
+			newOrder = append(newOrder, oid)
+		}
+	}
+	s.order = newOrder
+	return true
+}
+
 // Get retrieves a card by ID.
 func (s *Store) Get(id string) (*Card, bool) {
-	s.mu.RUnlock()
+	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	c, exists := s.cards[id]

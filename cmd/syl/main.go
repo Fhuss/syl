@@ -55,9 +55,10 @@ Keys in TUI:
   [Enter]      Toggle full-width detail / split view
   [c / y]      Copy card code snippet to system clipboard
   [p]          Pin / unpin card
+  [x / d]      Drop / delete card from reference pane
   [h]          Toggle version revision history
   [s]          Send card context to chat surface (cmux / clipboard)
-  [Space/d]    Advance turn (in demo mode)
+  [Space]      Advance turn (in demo mode)
   [q, Ctrl+C]  Quit
 `, version)
 	}
