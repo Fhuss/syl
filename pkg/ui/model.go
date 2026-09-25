@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/reconciler"
@@ -451,7 +452,7 @@ func (m *Model) actionExport() tea.Cmd {
 	})
 }
 
-func (m *Model) renderHelpModal() string {
+func (m *Model) buildHelpModal() string {
 	boxWidth := 74
 	if m.width > 20 && m.width < 78 {
 		boxWidth = m.width - 4
@@ -525,11 +526,108 @@ func (m *Model) renderHelpModal() string {
 		Width(boxWidth).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorPrimary).
-		Background(lipgloss.Color("#1E222A")).
+		Background(lipgloss.Color("#16191E")).
 		Padding(paddingY, 2)
 
-	modalBox := boxStyle.Render(b.String())
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modalBox)
+	return boxStyle.Render(b.String())
+}
+
+func (m *Model) overlayModalOnBlurredBackdrop(baseView, modalBox string) string {
+	bgLines := strings.Split(baseView, "\n")
+	modalLines := strings.Split(modalBox, "\n")
+
+	modalH := len(modalLines)
+	modalW := lipgloss.Width(modalBox)
+
+	targetW := m.width
+	if targetW <= 0 {
+		targetW = 80
+	}
+	targetH := m.height
+	if targetH <= 0 {
+		targetH = len(bgLines)
+	}
+	if targetH < modalH {
+		targetH = modalH
+	}
+
+	modalX := (targetW - modalW) / 2
+	if modalX < 0 {
+		modalX = 0
+	}
+	modalY := (targetH - modalH) / 2
+	if modalY < 0 {
+		modalY = 0
+	}
+
+	// Blur style: faint muted slate gray that pushes background content into defocus
+	blurStyle := lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#4C566A"))
+
+	outLines := make([]string, targetH)
+	for y := 0; y < targetH; y++ {
+		rawBg := ""
+		if y < len(bgLines) {
+			rawBg = bgLines[y]
+		}
+		strippedBg := ansi.Strip(rawBg)
+
+		if y >= modalY && y < modalY+modalH {
+			// Row is partially covered by modal
+			modalLine := modalLines[y-modalY]
+			curModalW := ansi.StringWidth(modalLine)
+			if curModalW < modalW {
+				modalLine += strings.Repeat(" ", modalW-curModalW)
+			}
+
+			// Left side of backdrop
+			leftPlain := ""
+			if modalX > 0 {
+				leftPlain = ansi.CutWc(strippedBg, 0, modalX)
+				lw := ansi.StringWidth(leftPlain)
+				if lw < modalX {
+					leftPlain += strings.Repeat(" ", modalX-lw)
+				}
+			}
+
+			// Right side of backdrop
+			rightStart := modalX + modalW
+			rightAvail := targetW - rightStart
+			rightPlain := ""
+			if rightAvail > 0 {
+				rightPlain = ansi.CutWc(strippedBg, rightStart, targetW)
+				rw := ansi.StringWidth(rightPlain)
+				if rw < rightAvail {
+					rightPlain += strings.Repeat(" ", rightAvail-rw)
+				}
+			}
+
+			line := ""
+			if modalX > 0 {
+				line += blurStyle.Render(leftPlain)
+			}
+			line += modalLine
+			if rightAvail > 0 {
+				line += blurStyle.Render(rightPlain)
+			}
+			outLines[y] = line
+		} else {
+			// Entire row is backdrop
+			lineContent := strippedBg
+			cw := ansi.StringWidth(lineContent)
+			if cw < targetW {
+				lineContent += strings.Repeat(" ", targetW-cw)
+			} else if cw > targetW {
+				lineContent = ansi.CutWc(lineContent, 0, targetW)
+			}
+			outLines[y] = blurStyle.Render(lineContent)
+		}
+	}
+
+	return strings.Join(outLines, "\n")
+}
+
+func (m *Model) renderHelpModal() string {
+	return m.overlayModalOnBlurredBackdrop(m.renderBaseView(), m.buildHelpModal())
 }
 
 func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
@@ -966,11 +1064,7 @@ func (m *Model) renderActionBar() string {
 	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
 }
 
-func (m *Model) View() string {
-	if m.showHelp {
-		return m.renderHelpModal()
-	}
-
+func (m *Model) renderBaseView() string {
 	cards := m.store.List()
 
 	// 1. Header
@@ -1049,6 +1143,14 @@ func (m *Model) View() string {
 	hints := FooterStyle.Render(hintText)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, actionBar, body, hints)
+}
+
+func (m *Model) View() string {
+	base := m.renderBaseView()
+	if m.showHelp {
+		return m.overlayModalOnBlurredBackdrop(base, m.buildHelpModal())
+	}
+	return base
 }
 
 func (m *Model) renderDetailFocus(cards []*card.Card) string {

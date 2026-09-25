@@ -320,6 +320,10 @@ func TestModelHelpModalToggle(t *testing.T) {
 	if !containsString(modalView, "Export session reference cards") {
 		t.Errorf("expected View() to contain export shortcut description")
 	}
+	// Verify background is preserved (blurred backdrop, not blank screen)
+	if !containsString(modalView, "test-session") {
+		t.Errorf("expected View() to contain blurred background session label, got:\n%s", modalView)
+	}
 
 	// Press 'esc' to close modal
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
