@@ -66,6 +66,11 @@ func Send(text string, overrideTarget string) (string, error) {
 
 	switch target.Type {
 	case "cmux":
+		setCmd := exec.Command("cmux", "set-buffer", text)
+		pasteCmd := exec.Command("cmux", "paste-buffer", "--surface", target.Surface)
+		if setCmd.Run() == nil && pasteCmd.Run() == nil {
+			return fmt.Sprintf("✓ Pasted to %s", target.Description), nil
+		}
 		cmd := exec.Command("cmux", "send", "--surface", target.Surface, text)
 		if err := cmd.Run(); err == nil {
 			return fmt.Sprintf("✓ Sent to %s", target.Description), nil
