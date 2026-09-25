@@ -610,13 +610,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
-		case "up", "k":
+		// Scrolling preview viewport content
+		case "up":
+			m.viewport.LineUp(2)
+			return m, nil
+
+		case "down":
+			m.viewport.LineDown(2)
+			return m, nil
+
+		case "pgup", "ctrl+u":
+			m.viewport.HalfViewUp()
+			return m, nil
+
+		case "pgdown", "ctrl+d":
+			m.viewport.HalfViewDown()
+			return m, nil
+
+		case "home", "g":
+			m.viewport.GotoTop()
+			return m, nil
+
+		case "end", "G":
+			m.viewport.GotoBottom()
+			return m, nil
+
+		// Navigating reference turns / cards
+		case "k", "left", "[":
 			if m.selectedIndex > 0 {
 				m.selectedIndex--
 				m.updateViewportContent()
 			}
 
-		case "down", "j":
+		case "j", "right", "]":
 			cards := m.store.List()
 			if m.selectedIndex < len(cards)-1 {
 				m.selectedIndex++
@@ -810,15 +836,15 @@ func (m *Model) View() string {
 	var hintText string
 	if m.width < 90 {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 Tab: Show turns • j/k: Switch • c: Copy • r: Raw • Hold ⌥ to select"
+			hintText = "💡 Tab: Show turns • ↑/↓: Scroll • j/k: Turn • c: Copy • r: Raw"
 		} else {
-			hintText = "💡 Tab: Hide turns • j/k: Nav • c: Copy • r: Raw • Hold ⌥ to select"
+			hintText = "💡 Tab: Hide turns • ↑/↓: Scroll • j/k: Turn • c: Copy • r: Raw"
 		}
 	} else {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 Tab: Show turns • j/k: Switch turn • c: Copy code • C: Copy all • r: Raw • Hold Option/Alt to select text"
+			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Show turns • c: Copy • r: Raw • Hold ⌥ to select"
 		} else {
-			hintText = "💡 Tab: Hide turns • j/k: Navigate • c: Copy code • C: Copy all • r: Raw • Hold Option/Alt to select text"
+			hintText = "💡 ↑/↓: Scroll preview • j/k (or ←/→): Switch turn • Tab: Hide turns • c: Copy • r: Raw • Hold ⌥ to select"
 		}
 	}
 	hints := FooterStyle.Render(hintText)
@@ -861,7 +887,7 @@ func (m *Model) renderDetailFocus(cards []*card.Card) string {
 
 	turnNavHint := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Render(fmt.Sprintf("[%d/%d]  [j/k: navigate • Tab: show turns]", m.selectedIndex+1, len(cards)))
+		Render(fmt.Sprintf("[%d/%d]  [↑/↓: scroll • j/k: switch turn • Tab: show turns]", m.selectedIndex+1, len(cards)))
 
 	titleStr := lipgloss.NewStyle().Bold(true).Render(selected.Title)
 

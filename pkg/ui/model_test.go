@@ -215,3 +215,73 @@ func hasSubstr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestModelArrowScrollVsTurnNav(t *testing.T) {
+	store := card.NewStore()
+	longContent := "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20"
+	store.Add(&card.Card{
+		ID:      "card-1",
+		Type:    card.TypeProcedure,
+		Title:   "Turn 1",
+		Content: longContent,
+	})
+	store.Add(&card.Card{
+		ID:      "card-2",
+		Type:    card.TypeProcedure,
+		Title:   "Turn 2",
+		Content: "Second card content",
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 100
+	m.height = 10
+	m.updateViewportSize()
+	m.updateViewportContent()
+
+	// Initial state: selected card is 0 (Turn 1), viewport YOffset is 0
+	if m.selectedIndex != 0 {
+		t.Fatalf("expected initial selectedIndex 0, got %d", m.selectedIndex)
+	}
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected initial YOffset 0, got %d", m.viewport.YOffset)
+	}
+
+	// Press Down arrow: should scroll viewport down, NOT switch cards!
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.selectedIndex != 0 {
+		t.Errorf("Down arrow should NOT switch cards, got selectedIndex %d", m.selectedIndex)
+	}
+	if m.viewport.YOffset <= 0 {
+		t.Errorf("Down arrow should scroll viewport down, got YOffset %d", m.viewport.YOffset)
+	}
+
+	// Press Up arrow: should scroll viewport back up
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if m.selectedIndex != 0 {
+		t.Errorf("Up arrow should NOT switch cards, got selectedIndex %d", m.selectedIndex)
+	}
+
+	// Press 'j': should switch to next card
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.selectedIndex != 1 {
+		t.Errorf("'j' should switch to next card (index 1), got %d", m.selectedIndex)
+	}
+
+	// Press 'k': should switch back to previous card
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.selectedIndex != 0 {
+		t.Errorf("'k' should switch to previous card (index 0), got %d", m.selectedIndex)
+	}
+
+	// Press Right arrow: should also switch to next card
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if m.selectedIndex != 1 {
+		t.Errorf("Right arrow should switch to next card, got %d", m.selectedIndex)
+	}
+
+	// Press Left arrow: should also switch to previous card
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.selectedIndex != 0 {
+		t.Errorf("Left arrow should switch to previous card, got %d", m.selectedIndex)
+	}
+}

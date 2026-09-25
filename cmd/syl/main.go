@@ -53,7 +53,8 @@ Flags:
   -h, --help           Show this help message
 
 Keys in TUI:
-  [j/k, ↑/↓]   Navigate reference cards
+  [↑/↓]        Scroll preview content (PgUp/PgDn, Ctrl+u/d)
+  [j/k, ←/→]   Navigate reference turns / cards ([ and ] also work)
   [Tab/Enter]  Toggle focus view (hide/show turns column)
   [c]          Copy card code snippet(s) to system clipboard
   [C / y]      Copy full card markdown content to clipboard
