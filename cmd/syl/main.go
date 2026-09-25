@@ -162,6 +162,7 @@ Keys in TUI:
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var activityCh chan watcher.AgentActivity
 	sessionLabel := "demo"
 	if !isDemo {
 		transcriptPath := fileFlag
@@ -189,16 +190,17 @@ Keys in TUI:
 
 		if transcriptPath != "" {
 			turnCh = make(chan *watcher.Turn, 100)
+			activityCh = make(chan watcher.AgentActivity, 20)
 			fw := watcher.NewFileWatcher(transcriptPath)
 			go func() {
-				if err := fw.Watch(ctx, turnCh); err != nil {
+				if err := fw.Watch(ctx, turnCh, activityCh); err != nil {
 					fmt.Fprintf(os.Stderr, "Watcher error: %v\n", err)
 				}
 			}()
 		}
 	}
 
-	model := ui.NewModel(store, rec, turnCh, isDemo, sessionLabel)
+	model := ui.NewModel(store, rec, turnCh, activityCh, isDemo, sessionLabel)
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {

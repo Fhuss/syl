@@ -22,10 +22,11 @@ func TestFileWatcher(t *testing.T) {
 	defer cancel()
 
 	turnCh := make(chan *Turn, 5)
+	activityCh := make(chan AgentActivity, 5)
 	w := NewFileWatcher(logFile)
 
 	go func() {
-		_ = w.Watch(ctx, turnCh)
+		_ = w.Watch(ctx, turnCh, activityCh)
 	}()
 
 	// Write turn 1

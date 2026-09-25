@@ -23,6 +23,9 @@ type TranscriptRecord struct {
 	Status    string `json:"status"`
 	Content   string `json:"content"`
 	CreatedAt string `json:"created_at"`
+	ToolCalls []struct {
+		Name string `json:"name"`
+	} `json:"tool_calls"`
 }
 
 type FileWatcher struct {
@@ -33,8 +36,8 @@ func NewFileWatcher(path string) *FileWatcher {
 	return &FileWatcher{path: path}
 }
 
-// Watch streams newly completed Turns from the transcript file until ctx is cancelled.
-func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn) error {
+// Watch streams newly completed Turns and real-time AgentActivity from the transcript file.
+func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh chan<- AgentActivity) error {
 	file, err := os.Open(w.path)
 	if err != nil {
 		return err
@@ -54,6 +57,17 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn) error {
 	reader := bufio.NewReader(file)
 	var pendingUser string
 	turnCount := 0
+	isCatchingUp := true
+
+	sendActivity := func(act AgentActivity) {
+		if activityCh == nil {
+			return
+		}
+		select {
+		case activityCh <- act:
+		default:
+		}
+	}
 
 	processAvailableLines := func() {
 		for {
@@ -80,6 +94,22 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn) error {
 					userText = strings.TrimSpace(matches[1])
 				}
 				pendingUser = userText
+				if !isCatchingUp {
+					sendActivity(AgentActivity{
+						IsBusy:    true,
+						Prompt:    pendingUser,
+						Tool:      "Thinking...",
+						Timestamp: time.Now(),
+					})
+				}
+			} else if len(rec.ToolCalls) > 0 && pendingUser != "" && !isCatchingUp {
+				toolName := rec.ToolCalls[0].Name
+				sendActivity(AgentActivity{
+					IsBusy:    true,
+					Prompt:    pendingUser,
+					Tool:      "Running " + toolName,
+					Timestamp: time.Now(),
+				})
 			} else if rec.Type == "PLANNER_RESPONSE" && rec.Content != "" && pendingUser != "" {
 				turnCount++
 				t := &Turn{
@@ -95,12 +125,28 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn) error {
 				case <-ctx.Done():
 					return
 				}
+
+				if !isCatchingUp {
+					sendActivity(AgentActivity{
+						IsBusy:    false,
+						Timestamp: time.Now(),
+					})
+				}
 			}
 		}
 	}
 
 	// Initial catch-up on existing content
 	processAvailableLines()
+	isCatchingUp = false
+	if pendingUser != "" {
+		sendActivity(AgentActivity{
+			IsBusy:    true,
+			Prompt:    pendingUser,
+			Tool:      "Thinking...",
+			Timestamp: time.Now(),
+		})
+	}
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()

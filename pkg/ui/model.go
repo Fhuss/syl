@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -54,6 +55,7 @@ type Model struct {
 	store         *card.Store
 	reconciler    reconciler.Reconciler
 	turnCh        chan *watcher.Turn
+	activityCh    chan watcher.AgentActivity
 	selectedIndex int
 	viewMode      ViewMode
 	isDemo        bool
@@ -66,9 +68,13 @@ type Model struct {
 	viewport      viewport.Model
 	buttons       []Button
 	sessionLabel  string
+	spinner       spinner.Model
+	isAgentBusy   bool
+	agentTool     string
+	agentPrompt   string
 }
 
-func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, isDemo bool, sessionLabel string) *Model {
+func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(80),
@@ -76,10 +82,15 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 
 	vp := viewport.New(80, 20)
 
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(ColorWarning)
+
 	m := &Model{
 		store:         store,
 		reconciler:    rec,
 		turnCh:        turnCh,
+		activityCh:    activityCh,
 		selectedIndex: 0,
 		viewMode:      ModeSplit,
 		isDemo:        isDemo,
@@ -88,6 +99,7 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 		viewport:      vp,
 		buttons:       make([]Button, 0),
 		sessionLabel:  sessionLabel,
+		spinner:       sp,
 	}
 
 	return m
@@ -95,14 +107,33 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, turnCh chan *watcher
 
 func (m *Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.spinner.Tick)
 
 	if m.isDemo {
 		cmds = append(cmds, m.advanceDemo())
-	} else if m.turnCh != nil {
-		cmds = append(cmds, m.listenForTurns())
+	} else {
+		if m.turnCh != nil {
+			cmds = append(cmds, m.listenForTurns())
+		}
+		if m.activityCh != nil {
+			cmds = append(cmds, m.listenForActivity())
+		}
 	}
 
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) listenForActivity() tea.Cmd {
+	return func() tea.Msg {
+		if m.activityCh == nil {
+			return nil
+		}
+		act, ok := <-m.activityCh
+		if !ok {
+			return nil
+		}
+		return act
+	}
 }
 
 func (m *Model) listenForTurns() tea.Cmd {
@@ -151,8 +182,13 @@ func (m *Model) advanceDemo() tea.Cmd {
 		}
 	}
 
-	m.reconciling = true
-	return m.applyReconcile(turn)
+	m.isAgentBusy = true
+	m.agentPrompt = turn.User
+	m.agentTool = "Planning..."
+
+	return tea.Tick(400*time.Millisecond, func(t time.Time) tea.Msg {
+		return TurnReceivedMsg{Turn: turn}
+	})
 }
 
 func (m *Model) updateViewportContent() {
@@ -289,7 +325,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		return m, nil
 
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
+	case watcher.AgentActivity:
+		m.isAgentBusy = msg.IsBusy
+		m.agentTool = msg.Tool
+		m.agentPrompt = msg.Prompt
+		return m, m.listenForActivity()
+
 	case TurnReceivedMsg:
+		m.isAgentBusy = false
 		m.reconciling = true
 		return m, tea.Batch(m.applyReconcile(msg.Turn), m.listenForTurns())
 
@@ -476,7 +524,13 @@ func (m *Model) View() string {
 
 	// 1. Header
 	var statusBadge string
-	if m.reconciling {
+	if m.isAgentBusy {
+		toolName := m.agentTool
+		if toolName == "" {
+			toolName = "BUSY"
+		}
+		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render(m.spinner.View() + " " + strings.ToUpper(toolName))
+	} else if m.reconciling {
 		statusBadge = StatusReconciling.Render()
 	} else if m.isDemo {
 		statusBadge = StatusDemo.Render()
@@ -509,7 +563,13 @@ func (m *Model) View() string {
 	// 3. Body
 	var body string
 	if len(cards) == 0 {
-		emptyMsg := "No reference cards captured yet.\nStart chatting in your AI assistant or click [Next Turn] to preview."
+		var emptyMsg string
+		if m.isAgentBusy {
+			emptyMsg = fmt.Sprintf("%s Agent is processing your request in AGY...\n\nAction: %s\nPrompt: %q\n\nReference cards will appear automatically when the turn completes.",
+				m.spinner.View(), m.agentTool, m.agentPrompt)
+		} else {
+			emptyMsg = "No reference cards captured yet.\nStart chatting in your AI assistant or click [Next Turn] to preview."
+		}
 		body = lipgloss.NewStyle().
 			Padding(2, 2).
 			Foreground(ColorMuted).
@@ -526,7 +586,7 @@ func (m *Model) View() string {
 
 func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 	// Left column: list of cards
-	leftLines := make([]string, 0, len(cards))
+	leftLines := make([]string, 0, len(cards)+1)
 	for i, c := range cards {
 		var badge string
 		switch c.Type {
@@ -563,6 +623,29 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 			line = CardItemStyle.Render("  " + line)
 		}
 		leftLines = append(leftLines, line)
+	}
+
+	// Add dynamic loading state card when agent is busy
+	if m.isAgentBusy {
+		execBadge := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#000000")).
+			Background(ColorWarning).
+			Padding(0, 1).
+			SetString("EXEC")
+
+		pendingTitle := m.agentPrompt
+		if len(pendingTitle) > 18 {
+			pendingTitle = pendingTitle[:15] + "..."
+		}
+		if pendingTitle == "" {
+			pendingTitle = "Thinking..."
+		}
+
+		pendingLine := lipgloss.NewStyle().
+			Foreground(ColorWarning).
+			Render(fmt.Sprintf("  %s %s %s", execBadge, m.spinner.View(), pendingTitle))
+		leftLines = append(leftLines, pendingLine)
 	}
 	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftLines...)
 
