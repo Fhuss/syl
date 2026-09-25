@@ -693,6 +693,26 @@ func (m *Model) getLeftColWidth() int {
 	return 54
 }
 
+// cardTypeBadge returns the rendered badge string for a card.
+// TypeProcedure is the overwhelming default and adds no signal, so it is hidden.
+// Only CMD, DEC, INFO, and INVALID badges are shown.
+func cardTypeBadge(c *card.Card) string {
+	if c.Status == card.StatusInvalidated {
+		return BadgeInvalid.Render()
+	}
+	switch c.Type {
+	case card.TypeCommand:
+		return BadgeCmd.Render()
+	case card.TypeDecision:
+		return BadgeDec.Render()
+	case card.TypeInfo:
+		return BadgeInfo.Render()
+	default:
+		// TypeProcedure and anything else: no badge — silence the noise
+		return ""
+	}
+}
+
 func (m *Model) handleButtonAction(action string) tea.Cmd {
 	switch action {
 	case "toggle_focus":
@@ -1223,20 +1243,7 @@ func (m *Model) renderDetailFocus(cards []*card.Card) string {
 	}
 	selected := cards[m.selectedIndex]
 
-	var badge lipgloss.Style
-	switch selected.Type {
-	case card.TypeProcedure:
-		badge = BadgeProc
-	case card.TypeCommand:
-		badge = BadgeCmd
-	case card.TypeDecision:
-		badge = BadgeDec
-	default:
-		badge = BadgeInfo
-	}
-	if selected.Status == card.StatusInvalidated {
-		badge = BadgeInvalid
-	}
+	badgeStr := cardTypeBadge(selected)
 
 	numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%d", selected.Number))
 	verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", selected.Version))
@@ -1256,7 +1263,11 @@ func (m *Model) renderDetailFocus(cards []*card.Card) string {
 
 	titleStr := lipgloss.NewStyle().Bold(true).Render(selected.Title)
 
-	bannerLeft := fmt.Sprintf("%s  %s %s %s%s %s", modeIndicator, numStr, badge.Render(), pinIcon, titleStr, verStr)
+	badgePart := ""
+	if badgeStr != "" {
+		badgePart = badgeStr + " "
+	}
+	bannerLeft := fmt.Sprintf("%s  %s %s%s%s %s", modeIndicator, numStr, badgePart, pinIcon, titleStr, verStr)
 	gap := m.width - lipgloss.Width(bannerLeft) - lipgloss.Width(turnNavHint) - 4
 	if gap < 2 {
 		gap = 2
@@ -1289,21 +1300,7 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 
 	leftLines := make([]string, 0, len(cards)+1)
 	for i, c := range cards {
-		var badge lipgloss.Style
-		switch c.Type {
-		case card.TypeProcedure:
-			badge = BadgeProc
-		case card.TypeCommand:
-			badge = BadgeCmd
-		case card.TypeDecision:
-			badge = BadgeDec
-		default:
-			badge = BadgeInfo
-		}
-
-		if c.Status == card.StatusInvalidated {
-			badge = BadgeInvalid
-		}
+		badgeStr := cardTypeBadge(c)
 
 		prefix := "  "
 		if i == m.selectedIndex {
@@ -1311,7 +1308,6 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 		}
 
 		numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%-2d", c.Number))
-		badgeStr := badge.Render()
 		pinIcon := ""
 		if c.Pinned {
 			pinIcon = "📌 "
@@ -1319,7 +1315,11 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 		verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", c.Version))
 
 		// Calculate available width for the title so the row NEVER wraps
-		fixedWidth := lipgloss.Width(prefix) + lipgloss.Width(numStr) + 1 + lipgloss.Width(badgeStr) + 1 + lipgloss.Width(pinIcon) + 1 + lipgloss.Width(verStr)
+		badgePadding := 0
+		if badgeStr != "" {
+			badgePadding = lipgloss.Width(badgeStr) + 1
+		}
+		fixedWidth := lipgloss.Width(prefix) + lipgloss.Width(numStr) + 1 + badgePadding + lipgloss.Width(pinIcon) + 1 + lipgloss.Width(verStr)
 		availTitle := innerWidth - fixedWidth
 		if availTitle < 6 {
 			availTitle = 6
@@ -1335,7 +1335,12 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 			}
 		}
 
-		leftPart := fmt.Sprintf("%s%s %s %s%s", prefix, numStr, badgeStr, pinIcon, title)
+		var leftPart string
+		if badgeStr != "" {
+			leftPart = fmt.Sprintf("%s%s %s %s%s", prefix, numStr, badgeStr, pinIcon, title)
+		} else {
+			leftPart = fmt.Sprintf("%s%s %s%s", prefix, numStr, pinIcon, title)
+		}
 		gap := innerWidth - lipgloss.Width(leftPart) - lipgloss.Width(verStr)
 		if gap < 1 {
 			gap = 1
