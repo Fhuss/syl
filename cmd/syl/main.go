@@ -141,14 +141,16 @@ Keys in TUI:
 
 	// Choose reconciler
 	var rec reconciler.Reconciler
-	if isDemo || cfg.LLM.Provider == "mock" {
+	if isDemo {
 		rec = reconciler.NewMockReconciler()
-	} else {
+	} else if cfg.LLM.APIKey != "" && cfg.LLM.Provider != "mock" {
 		rec = reconciler.NewLLMReconciler(reconciler.LLMConfig{
 			Endpoint: cfg.LLM.Endpoint,
 			APIKey:   cfg.LLM.APIKey,
 			Model:    cfg.LLM.Model,
 		})
+	} else {
+		rec = reconciler.NewHeuristicReconciler()
 	}
 
 	var turnCh chan *watcher.Turn
