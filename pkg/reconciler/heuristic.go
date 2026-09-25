@@ -30,6 +30,7 @@ var (
 	correctionRegex   = regexp.MustCompile(`(?i)\b(error|failed|fails|failing|fix|fixed|instead|instead of|switch to|switch from|still getting|still failing)\b|\bchange\s+(the\s+)?(region|port|flag|subnet|image|version|config|cluster|user|password|name|directory|path|env)\b`)
 	continuationRegex = regexp.MustCompile(`(?i)\b((this|that|the|previous)\s+(step|procedure|command|script|card|snippet|config)|step\s+\d+|same\s+(command|script|step))\b`)
 	invalidationRegex = regexp.MustCompile(`(?i)\b(don't use|do not use|deprecated|disproven|obsolete|drop this|invalid)\b`)
+	refCardRegex      = regexp.MustCompile(`(?i)\[Ref:\s*([^\]]+?)(?:\s+\(v\d+\))?\]`)
 )
 
 // HeuristicReconciler extracts and mutates reference cards without requiring an external LLM API.
@@ -68,8 +69,9 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 	// 2. Filter out conversational chatter: check for actionable code or procedures
 	matches := fenceRegex.FindAllStringSubmatch(turn.Assistant, -1)
 	hasSteps := len(stepRegex.FindAllString(turn.Assistant, -1)) >= 2
+	hasMarkdownStructure := strings.Contains(turn.Assistant, "### ") || strings.Contains(turn.Assistant, "## ") || hasSteps
 
-	if len(matches) == 0 && !hasSteps {
+	if len(matches) == 0 && !hasSteps && !hasMarkdownStructure {
 		return []Mutation{
 			{
 				Op:     OpNoop,
@@ -78,29 +80,70 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 		}, nil
 	}
 
-	// Build clean content from code blocks or fallback to formatted assistant steps
-	var contentBuilder strings.Builder
-	for i, m := range matches {
-		lang := m[1]
-		code := strings.TrimSpace(m[2])
-		if code == "" {
-			continue
+	// Build clean content: preserve rich markdown structure if formatted procedures exist,
+	// or cleanly isolate code blocks if it was conversational chatter around code.
+	var content string
+	if hasMarkdownStructure {
+		content = strings.TrimSpace(turn.Assistant)
+	} else if len(matches) > 0 {
+		var contentBuilder strings.Builder
+		for i, m := range matches {
+			lang := m[1]
+			code := strings.TrimSpace(m[2])
+			if code == "" {
+				continue
+			}
+			if i > 0 {
+				contentBuilder.WriteString("\n\n")
+			}
+			contentBuilder.WriteString(fmt.Sprintf("```%s\n%s\n```", lang, code))
 		}
-		if i > 0 {
-			contentBuilder.WriteString("\n\n")
-		}
-		contentBuilder.WriteString(fmt.Sprintf("```%s\n%s\n```", lang, code))
+		content = contentBuilder.String()
+	} else {
+		content = strings.TrimSpace(turn.Assistant)
 	}
-	if contentBuilder.Len() == 0 {
-		contentBuilder.WriteString(turn.Assistant)
-	}
-
-	content := contentBuilder.String()
 
 	// 3. Check for in-place mutation: does this turn refine, correct, or evolve an existing card?
-	if target := findMatchingCard(currentCards, turn, content); target != nil {
+	target := findMatchingCard(currentCards, turn, content)
+
+	// If no match found by ref/keywords, check if candidate title matches an existing card
+	if target == nil && len(currentCards) > 0 {
+		var candidateTitle string
+		if cached, ok := harness.GetTitleCache().GetByPrompt(turn.User); ok {
+			candidateTitle = cached
+		} else {
+			candidateTitle, _ = harness.NewHeuristicHarness().Summarize(ctx, turn.User, turn.Assistant)
+		}
+		if candidateTitle != "" {
+			for i := len(currentCards) - 1; i >= 0; i-- {
+				c := currentCards[i]
+				if c.Status != card.StatusInvalidated && strings.EqualFold(strings.TrimSpace(c.Title), strings.TrimSpace(candidateTitle)) {
+					target = c
+					break
+				}
+			}
+		}
+	}
+
+	if target != nil {
+		isElaboration := strings.Contains(userPromptLower, "elaborate") ||
+			strings.Contains(userPromptLower, "more") ||
+			strings.Contains(userPromptLower, "add") ||
+			strings.Contains(userPromptLower, "append") ||
+			strings.Contains(userPromptLower, "also") ||
+			strings.Contains(userPromptLower, "extend") ||
+			strings.Contains(userPromptLower, "detail") ||
+			strings.Contains(userPromptLower, "expand") ||
+			(refCardRegex.MatchString(turn.User) && !strings.Contains(userPromptLower, "error") && !strings.Contains(userPromptLower, "failed") && !strings.Contains(userPromptLower, "fix"))
+
+		finalContent := content
 		reason := fmt.Sprintf("Revised after user follow-up (Turn %d)", turn.ID)
-		if strings.Contains(userPromptLower, "error") || strings.Contains(userPromptLower, "failed") {
+
+		if isElaboration {
+			// Append the new context / steps cleanly to the existing card
+			finalContent = target.Content + "\n\n---\n\n" + content
+			reason = fmt.Sprintf("Elaborated with additional context in Turn %d", turn.ID)
+		} else if strings.Contains(userPromptLower, "error") || strings.Contains(userPromptLower, "failed") {
 			reason = fmt.Sprintf("Fixed error reported in Turn %d", turn.ID)
 		} else if strings.Contains(userPromptLower, "instead") || strings.Contains(userPromptLower, "change") || strings.Contains(userPromptLower, "region") {
 			reason = fmt.Sprintf("Adjusted configuration in Turn %d", turn.ID)
@@ -110,7 +153,7 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 			{
 				Op:      OpUpdate,
 				CardID:  target.ID,
-				Content: content,
+				Content: finalContent,
 				Reason:  reason,
 			},
 		}, nil
@@ -169,6 +212,22 @@ func findMatchingCard(cards []*card.Card, turn *watcher.Turn, newCommands string
 
 	userLower := strings.ToLower(turn.User)
 	newCmdLower := strings.ToLower(newCommands)
+
+	// 0. Explicit Syl Reference Card injection: e.g. [Ref: Switching Terminal Panes (v1)]
+	if m := refCardRegex.FindStringSubmatch(turn.User); len(m) > 1 {
+		refTitle := strings.TrimSpace(m[1])
+		refTitleLower := strings.ToLower(refTitle)
+		for i := len(cards) - 1; i >= 0; i-- {
+			c := cards[i]
+			if c.Status == card.StatusInvalidated {
+				continue
+			}
+			cTitleLower := strings.ToLower(strings.TrimSpace(c.Title))
+			if cTitleLower == refTitleLower || strings.Contains(cTitleLower, refTitleLower) || strings.Contains(refTitleLower, cTitleLower) {
+				return c
+			}
+		}
+	}
 
 	hasCorrection := correctionRegex.MatchString(userLower)
 	hasContinuation := continuationRegex.MatchString(userLower)

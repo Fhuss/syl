@@ -2,9 +2,11 @@ package reconciler
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/watcher"
 )
 
@@ -201,6 +203,88 @@ func TestHeuristicCardIDNoCollisionOnRestart(t *testing.T) {
 	}
 	if muts[0].CardID != "card-3" {
 		t.Errorf("expected CardID 'card-3', got %s", muts[0].CardID)
+	}
+}
+
+func TestHeuristicReconcilerRefTagAndElaboration(t *testing.T) {
+	h := NewHeuristicReconciler()
+	ctx := context.Background()
+
+	card1 := &card.Card{
+		ID:      "card-1",
+		Title:   "Switching Terminal Panes",
+		Content: "Initial terminal instructions...",
+		Version: 1,
+	}
+	existing := []*card.Card{card1}
+
+	turn := &watcher.Turn{
+		ID:   2,
+		User: "[Ref: Switching Terminal Panes (v1)] can you elaborate a bit more",
+		Assistant: `Based on **[Ref: Switching Terminal Panes (v1)]**, here is an in-depth breakdown:
+
+### Step 1: Navigate Adjacent Panes via Keyboard
+* Next Pane: Cmd + Option + Arrow
+
+### Step 2: Switch Panes Programmatically via cmux CLI
+` + "```bash\ncmux list-panels\n```",
+	}
+
+	muts, err := h.Reconcile(ctx, existing, turn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(muts) != 1 {
+		t.Fatalf("expected 1 mutation, got %d", len(muts))
+	}
+	if muts[0].Op != OpUpdate {
+		t.Fatalf("expected OpUpdate, got %v", muts[0].Op)
+	}
+	if muts[0].CardID != "card-1" {
+		t.Errorf("expected CardID card-1, got %s", muts[0].CardID)
+	}
+	// Verify that the content appends the previous content
+	if !strings.Contains(muts[0].Content, "Initial terminal instructions...") {
+		t.Errorf("expected updated content to preserve and append to initial content, got %s", muts[0].Content)
+	}
+	if !strings.Contains(muts[0].Content, "### Step 1: Navigate Adjacent Panes via Keyboard") {
+		t.Errorf("expected updated content to include step heading, got %s", muts[0].Content)
+	}
+}
+
+func TestHeuristicReconcilerSameTitleMatching(t *testing.T) {
+	h := NewHeuristicReconciler()
+	ctx := context.Background()
+
+	card1 := &card.Card{
+		ID:      "card-1",
+		Title:   "AWS Deployment Guide",
+		Content: "```bash\necho aws v1\n```",
+		Version: 1,
+	}
+	existing := []*card.Card{card1}
+
+	// Turn has prompt that triggers the same title
+	harness.GetTitleCache().SetByPrompt("Can you give more details on the deploy guide?", "AWS Deployment Guide")
+
+	turn := &watcher.Turn{
+		ID:        2,
+		User:      "Can you give more details on the deploy guide?",
+		Assistant: "```bash\necho aws v2\n```",
+	}
+
+	muts, err := h.Reconcile(ctx, existing, turn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(muts) != 1 {
+		t.Fatalf("expected 1 mutation, got %d", len(muts))
+	}
+	if muts[0].Op != OpUpdate {
+		t.Fatalf("expected OpUpdate for same-title card, got %v", muts[0].Op)
+	}
+	if muts[0].CardID != "card-1" {
+		t.Errorf("expected CardID card-1, got %s", muts[0].CardID)
 	}
 }
 
