@@ -85,8 +85,13 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 		cardType = card.TypeProcedure
 	}
 
-	// Determine initial concise title using smart heuristic extraction
-	title, _ := harness.NewHeuristicHarness().Summarize(ctx, turn.User, turn.Assistant)
+	// Determine concise title using cache first, then smart heuristic extraction
+	var title string
+	if cached, ok := harness.GetTitleCache().GetByPrompt(turn.User); ok {
+		title = cached
+	} else {
+		title, _ = harness.NewHeuristicHarness().Summarize(ctx, turn.User, turn.Assistant)
+	}
 	if title == "" {
 		title = fmt.Sprintf("Turn #%d", turn.ID)
 	}

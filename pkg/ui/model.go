@@ -43,6 +43,7 @@ type MutationsAppliedMsg struct {
 type TitleSummarizedMsg struct {
 	CardID string
 	Title  string
+	Turn   *watcher.Turn
 }
 
 type ReconcileFailedMsg struct {
@@ -423,6 +424,7 @@ func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
 		return TitleSummarizedMsg{
 			CardID: cardID,
 			Title:  title,
+			Turn:   turn,
 		}
 	}
 }
@@ -501,6 +503,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, mut := range msg.Mutations {
 			switch mut.Op {
 			case reconciler.OpAdd:
+				// 1. Check title cache so restarted syl retains all past AI titles
+				if msg.Turn != nil {
+					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok {
+						mut.Title = cached
+					} else if cached, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok {
+						mut.Title = cached
+					}
+				}
+
 				m.store.Add(&card.Card{
 					ID:      mut.CardID,
 					Type:    mut.Type,
@@ -508,8 +519,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Content: mut.Content,
 				})
 				m.toast = fmt.Sprintf("Added: %s", mut.Title)
-				if msg.Turn != nil && !msg.Turn.IsCatchUp && m.harness != nil {
-					cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+
+				// 2. Queue AI summarization if not in cache (live turn or un-cached catch-up)
+				if msg.Turn != nil && m.harness != nil {
+					hasCache := false
+					if _, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok {
+						hasCache = true
+					} else if _, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok {
+						hasCache = true
+					}
+
+					if !msg.Turn.IsCatchUp || !hasCache {
+						cmds = append(cmds, m.summarizeCardTitle(mut.CardID, msg.Turn))
+					}
 				}
 			case reconciler.OpUpdate:
 				m.store.Update(mut.CardID, mut.Content, mut.Reason)
@@ -531,6 +553,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TitleSummarizedMsg:
 		if m.store.UpdateTitle(msg.CardID, msg.Title) {
 			m.updateViewportContent()
+		}
+		if msg.Turn != nil {
+			harness.GetTitleCache().Set(m.sessionLabel, msg.Turn.ID, msg.Title)
+			harness.GetTitleCache().SetByPrompt(msg.Turn.User, msg.Title)
 		}
 		return m, nil
 

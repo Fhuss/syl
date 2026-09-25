@@ -272,8 +272,9 @@ func (h *OllamaHarness) Summarize(ctx context.Context, userPrompt, assistantCont
 // -------------------------------------------------------------------------
 
 var (
-	politeRegex = regexp.MustCompile(`(?i)^(can you please|could you please|please|how do i|how can i|how to|why did you|i think|let's|let us|is it possible to|i want to|i need to|what if we|would it be possible to)\s+`)
-	cmdWordRegex = regexp.MustCompile(`(?i)\b(docker|kubectl|aws|git|go|npm|pnpm|yarn|cargo|python|terraform|redis|postgres|syl|cmux|tmux)\b.*`)
+	politeRegex        = regexp.MustCompile(`(?i)^(can you please|could you please|please|how do i|how can i|how to|why did you|i think|let's|let us|is it possible to|i want to|i need to|what if we|would it be possible to|so can you|can you|could you|one thing i'm missing is|one thing i'm|try out now i'm asking about|i'm asking about|are we still doing|how does it)\s+`)
+	headingPrefixRegex = regexp.MustCompile(`(?m)^#{1,3}\s+(?:\d+\.\s*)?([^\n]+)`)
+	cmdWordRegex       = regexp.MustCompile(`(?i)\b(docker|kubectl|aws|git|go|npm|pnpm|yarn|cargo|python|terraform|redis|postgres|syl|cmux|tmux)\b.*`)
 )
 
 type HeuristicHarness struct{}
@@ -300,16 +301,18 @@ func (h *HeuristicHarness) Summarize(ctx context.Context, userPrompt, assistantC
 	stripped := politeRegex.ReplaceAllString(firstLine, "")
 	stripped = strings.TrimSpace(stripped)
 
-	// If prompt is brief, inspect assistant content for commands or headings
+	// Check if assistant response has a clean heading
+	if headingMatch := headingPrefixRegex.FindStringSubmatch(assistantContent); len(headingMatch) > 1 {
+		heading := strings.TrimSpace(headingMatch[1])
+		if heading != "" && len(heading) <= 45 && !strings.HasPrefix(heading, "Context") {
+			return CleanTitle(heading), nil
+		}
+	}
+
+	// Inspect assistant commands
 	if len(stripped) < 8 || isGenericPrompt(stripped) {
 		for _, l := range strings.Split(assistantContent, "\n") {
 			l = strings.TrimSpace(l)
-			if strings.HasPrefix(l, "#") {
-				cleaned := strings.TrimLeft(l, "# ")
-				if cleaned != "" {
-					return CleanTitle(cleaned), nil
-				}
-			}
 			if cmdMatch := cmdWordRegex.FindString(l); cmdMatch != "" {
 				parts := strings.Fields(cmdMatch)
 				if len(parts) >= 2 {
