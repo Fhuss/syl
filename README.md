@@ -98,16 +98,13 @@ syl init-config
 
 ```yaml
 llm:
-  provider: gemini          # gemini | anthropic | openai | mock
-  model: gemini-2.5-flash
+  provider: gemini          # gemini | anthropic | openai | ollama | mock
+  model: gemini-2.0-flash
   api_key: ${GEMINI_API_KEY}
 
 subagent:
   harness: auto             # auto | agy | claude | pi | ollama | heuristic
   disabled: false
-
-watcher:
-  poll_interval_ms: 300
 ```
 
 ---
@@ -132,7 +129,7 @@ Press `?` inside `syl` to open the interactive help glossary.
 | `x` | Drop / delete card from reference pane |
 | `e` | Export all cards to `./syl-reference.md` |
 | `h` | Toggle revision history for selected card |
-| `s` | Send card context to chat surface |
+| `s` | Send card reference to peer terminal (cmux, tmux, or clipboard) |
 | `?` / `F1` | Toggle help glossary modal |
 | `Space` | Advance turn (demo mode only) |
 | `q` / `Ctrl+C` | Quit (saves session snapshot to disk) |
@@ -160,7 +157,7 @@ syl [command|flags]
 
 Commands:
   demo           Interactive demo simulating live card mutation
-  sessions       List recent conversation sessions
+  sessions       List recent conversation sessions across Antigravity, Claude Code, etc.
   init-config    Write default config to ~/.config/syl/config.yaml
   version        Print version
 
@@ -168,7 +165,7 @@ Flags:
   -s, --session string    Attach to session by ID or prefix
   -f, --file string       Path to transcript.jsonl
   -c, --config string     Path to config file
-  -p, --provider string   LLM provider override (mock, gemini, openai)
-      --harness string    Harness override (auto, agy, claude, pi, heuristic)
+  -p, --provider string   LLM provider override (mock, openai, gemini, anthropic, ollama)
+      --harness string    Harness override (auto, agy, claude, pi, ollama, heuristic)
   -h, --help              Show help
 ```
