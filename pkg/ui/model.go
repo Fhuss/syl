@@ -252,14 +252,14 @@ func (m *Model) advanceDemo() tea.Cmd {
 	}
 	switch m.demoStep {
 	case 1:
-		turn.User = "Deploy our service to AWS ECS Fargate using the AWS CLI"
-		turn.Assistant = "Here are the steps to deploy to ECS Fargate in us-east-1..."
+		turn.User = "Welcome to Syl! Show me how this works and give me a full tour of features and shortcuts."
+		turn.Assistant = "Welcome to Syl! Here is your quickstart tour with tips, tricks, and interactive cards for testing."
 	case 2:
-		turn.User = "Step 2 failed with AccessDenied: not authorized to perform ecr:GetAuthorizationToken"
-		turn.Assistant = "You need to attach AmazonEC2ContainerRegistryReadOnly to your task execution role first."
+		turn.User = "Can you update the quickstart guide with companion skill installation instructions?"
+		turn.Assistant = "Updated the quickstart guide to v2 and tracked the change in revision history."
 	case 3:
-		turn.User = "Actually, let's deploy to region eu-central-1 (Frankfurt) instead of us-east-1"
-		turn.Assistant = "Updated all commands to use eu-central-1."
+		turn.User = "Let's record the architecture decision to support both Ghostty cmux and tmux natively"
+		turn.Assistant = "Recorded the multiplexer architecture decision and added discovery commands."
 	default:
 		return func() tea.Msg {
 			return ClearToastMsg{}
@@ -1958,6 +1958,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case " ":
 			if m.isDemo {
+				cards := m.store.List()
+				if len(cards) > 0 && m.selectedIndex < len(cards) {
+					c := cards[m.selectedIndex]
+					if strings.Contains(c.Content, "- [ ]") || strings.Contains(c.Content, "- [x]") {
+						return m, m.actionToggleChecklist()
+					}
+				}
 				if m.demoStep < 3 {
 					return m, m.advanceDemo()
 				}
@@ -2286,11 +2293,11 @@ func (m *Model) getActionBarBadges() []actionBadge {
 		style:        helpStyle,
 	})
 
-	// 13. Demo next (Space)
+	// 13. Demo next (d or Space)
 	if m.isDemo {
 		badges = append(badges, actionBadge{
-			labelCompact: "Space Next",
-			labelFull:    "⏩ Next (Space)",
+			labelCompact: "d Next",
+			labelFull:    "⏩ Next Turn (d)",
 			action:       "demo_next",
 			style:        BtnHoverStyle,
 		})

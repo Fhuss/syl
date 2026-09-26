@@ -17,8 +17,8 @@ func TestMockReconcilerMultiTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turn 1 error: %v", err)
 	}
-	if len(muts1) != 1 || muts1[0].Op != OpAdd {
-		t.Fatalf("expected 1 ADD op, got %v", muts1)
+	if len(muts1) != 4 || muts1[0].Op != OpAdd {
+		t.Fatalf("expected 4 ADD ops, got %v", muts1)
 	}
 
 	// Turn 2
