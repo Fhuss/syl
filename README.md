@@ -28,6 +28,22 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
 
 ## Key Features
 
+### ⌨️ Dual-Pane Vim Navigation (`w`, `j`/`k`)
+Toggle focus between the **`[CARDS]`** turns column and the **`[PREVIEW]`** markdown buffer using **`w`** or **`Ctrl+w`**:
+* **In `[CARDS]`**: `j` / `k` navigates between conversation turns.
+* **In `[PREVIEW]`**: `j` / `k` scrolls the markdown buffer line-by-line.
+* **Universal Motions**: `Ctrl+e`/`Ctrl+y` (1-line nudge), `Ctrl+d`/`Ctrl+u` (half page), `Ctrl+f`/`Ctrl+b` (full page), `{`/`}` (5-line paragraph jump), and `gg`/`G` (top/bottom).
+* **In-Buffer Search**: Press **`/`** to find matches, then **`n`** / **`N`** to jump to next / previous match in the card preview.
+
+### 📝 External Editor Roundtrip (`v` / `E`)
+Press **`v`** or **`E`** to suspend Syl and open the selected card in your external editor (`$EDITOR`, `nvim`, `vim`, or `nano`). Any edits you save are automatically synchronized back into Syl's card store and persisted upon exit.
+
+### ☑️ Interactive Markdown Task Toggle (`␣` / `Space`)
+Press **`Space`** while on a card containing task items (`- [ ]`) to automatically check off the next pending item (`- [x]`). Once all tasks are checked, pressing `Space` resets them back to unchecked for repeatable workflows.
+
+### 🗂️ Code Block Folding (`za` / `Z`)
+Press **`za`** or **`Z`** to toggle code block folding on the active card. Bulky multi-line code fences are collapsed into concise markdown quotes (`> ▾ [bash] 12 lines folded`), keeping your reference pane neat and readable.
+
 ### 📦 Surgical Block & Step Picker (`b`)
 Press **`b`** on any card to open the actionable block modal:
 * **Code Blocks:** Tagged by language (`[BASH]`, `[SQL]`, `[DOCKER]`, `[YAML]`).
@@ -107,12 +123,25 @@ go build -o ~/.local/bin/syl ./cmd/syl
 syl
 ```
 
-### Demo Mode (No AI session required)
+### Demo Mode (Interactive Feature Tour)
 
 ```bash
 syl demo
 ```
-Replays an interactive multi-turn scenario to demonstrate live card patching and in-place versioning. Press `Space` to advance turns.
+Launches an interactive, zero-dependency tutorial showcasing live card mutations, tips & tricks, and all navigation controls:
+* **Interactive Checklist (Card #2)**: Press **`Space`** to toggle task items live.
+* **Code Folding (Card #3)**: Press **`za`** or **`Z`** to collapse large blocks.
+* **Live Turn Reconciler**: Press **`d`** or click **`[Next Turn]`** to advance turns and watch cards mutate from `v1` → `v2`.
+
+### Testing & Verification
+
+Run the automated test suite covering all dual-pane motions, in-buffer searching, folding, task toggling, and external editor integration:
+
+```bash
+./scripts/test-vim-features.sh
+# or run via go test
+go test -v -run "TestVim" ./pkg/ui
+```
 
 ### CLI Options
 
@@ -120,6 +149,7 @@ Replays an interactive multi-turn scenario to demonstrate live card patching and
 # (Optional) Explicit harness override
 syl --harness agy        # Force Antigravity
 syl --harness claude     # Force Claude Code
+syl --harness pi         # Force Pi Agent
 syl --harness heuristic  # Fast offline fallback (no AI calls)
 
 # Point at a specific transcript file
