@@ -80,6 +80,50 @@ func TestHeuristicReconciler(t *testing.T) {
 	}
 }
 
+func TestHeuristicCapturesSubstantiveRecommendationWithoutCode(t *testing.T) {
+	h := NewHeuristicReconciler()
+	turn := &watcher.Turn{
+		ID:   1,
+		User: "Tell me about the project itself, what shouold be the main USP of using it?",
+		Assistant: `Syl’s main USP should be **a living, actionable reference beside your AI chat**.
+
+A chat transcript preserves everything you said. Syl should preserve **what you can still use**: the current procedure, command, or decision—updated when the conversation corrects it, and ready to copy or send back with a keypress.
+
+> **Syl turns long AI conversations into a live reference pane, so the useful steps don’t get buried or go stale.**
+
+I’d lead with **in-place updates to instructions** as the differentiator.`,
+	}
+	muts, err := h.Reconcile(context.Background(), nil, turn)
+	if err != nil || len(muts) != 1 || muts[0].Op != OpAdd || muts[0].Type != card.TypeDecision {
+		t.Fatalf("expected a decision card, got %+v, %v", muts, err)
+	}
+	if muts[0].Content != turn.Assistant {
+		t.Fatalf("decision content should preserve the recommendation, got %q", muts[0].Content)
+	}
+
+	// A new product decision must not overwrite an unrelated command card.
+	existing := []*card.Card{{ID: "build", Type: card.TypeCommand, Title: "Build Syl", Content: "```bash\ngo build ./cmd/syl\n```"}}
+	muts, err = h.Reconcile(context.Background(), existing, turn)
+	if err != nil || len(muts) != 1 || muts[0].Op != OpAdd {
+		t.Fatalf("expected a new card beside the build command, got %+v, %v", muts, err)
+	}
+}
+
+func TestHeuristicSkipsConversationalAndVagueRecommendations(t *testing.T) {
+	tests := []watcher.Turn{
+		{User: "yes it did", Assistant: "Great—session selection and card capture are both working."},
+		{User: "Should I keep going?", Assistant: "Yes, go ahead."},
+		{User: "What should I do next?", Assistant: strings.Repeat("Here is some general background on the problem. ", 6)},
+		{User: "This didn't produce a card either", Assistant: strings.Repeat("The main issue is that no reusable information was added. ", 5)},
+	}
+	for _, turn := range tests {
+		muts, err := NewHeuristicReconciler().Reconcile(context.Background(), nil, &turn)
+		if err != nil || len(muts) != 1 || muts[0].Op != OpNoop {
+			t.Errorf("expected NOOP for %q, got %+v, %v", turn.User, muts, err)
+		}
+	}
+}
+
 func TestHeuristicNoSubstringFalsePositive(t *testing.T) {
 	h := NewHeuristicReconciler()
 	ctx := context.Background()
@@ -287,4 +331,3 @@ func TestHeuristicReconcilerSameTitleMatching(t *testing.T) {
 		t.Errorf("expected CardID card-1, got %s", muts[0].CardID)
 	}
 }
-

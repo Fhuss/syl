@@ -27,10 +27,12 @@ var (
 		return m
 	}()
 
-	correctionRegex   = regexp.MustCompile(`(?i)\b(error|failed|fails|failing|fix|fixed|instead|instead of|switch to|switch from|still getting|still failing)\b|\bchange\s+(the\s+)?(region|port|flag|subnet|image|version|config|cluster|user|password|name|directory|path|env)\b`)
-	continuationRegex = regexp.MustCompile(`(?i)\b((this|that|the|previous)\s+(step|procedure|command|script|card|snippet|config)|step\s+\d+|same\s+(command|script|step))\b`)
-	invalidationRegex = regexp.MustCompile(`(?i)\b(don't use|do not use|deprecated|disproven|obsolete|drop this|invalid)\b`)
-	refCardRegex      = regexp.MustCompile(`(?i)\[Ref:\s*([^\]]+?)(?:\s+\(v\d+\))?\]`)
+	correctionRegex     = regexp.MustCompile(`(?i)\b(error|failed|fails|failing|fix|fixed|instead|instead of|switch to|switch from|still getting|still failing)\b|\bchange\s+(the\s+)?(region|port|flag|subnet|image|version|config|cluster|user|password|name|directory|path|env)\b`)
+	continuationRegex   = regexp.MustCompile(`(?i)\b((this|that|the|previous)\s+(step|procedure|command|script|card|snippet|config)|step\s+\d+|same\s+(command|script|step))\b`)
+	invalidationRegex   = regexp.MustCompile(`(?i)\b(don't use|do not use|deprecated|disproven|obsolete|drop this|invalid)\b`)
+	refCardRegex        = regexp.MustCompile(`(?i)\[Ref:\s*([^\]]+?)(?:\s+\(v\d+\))?\]`)
+	decisionPromptRegex = regexp.MustCompile(`(?i)\b(what should|which .{0,60} should|should (we|i|the)|recommend(?:ation)?|decid(?:e|ing|ion)|trade-?offs?|prioriti[sz]|unique selling point|usp|position(?:ing)?)\b`)
+	decisionAnswerRegex = regexp.MustCompile(`(?i)\b(should|recommend|choose|prefer|main|key|trade-?off|because)\b`)
 )
 
 // HeuristicReconciler extracts and mutates reference cards without requiring an external LLM API.
@@ -66,16 +68,19 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 		}
 	}
 
-	// 2. Filter out conversational chatter: check for actionable code or procedures
+	// 2. Capture procedures and explicit, substantive recommendations, not
+	// acknowledgments or incidental mentions of a product/technology.
 	matches := fenceRegex.FindAllStringSubmatch(turn.Assistant, -1)
 	hasSteps := len(stepRegex.FindAllString(turn.Assistant, -1)) >= 2
 	hasMarkdownStructure := strings.Contains(turn.Assistant, "### ") || strings.Contains(turn.Assistant, "## ") || hasSteps
+	isDecision := len(strings.TrimSpace(turn.Assistant)) >= 160 &&
+		decisionPromptRegex.MatchString(turn.User) && decisionAnswerRegex.MatchString(turn.Assistant)
 
-	if len(matches) == 0 && !hasSteps && !hasMarkdownStructure {
+	if len(matches) == 0 && !hasMarkdownStructure && !isDecision {
 		return []Mutation{
 			{
 				Op:     OpNoop,
-				Reason: "No actionable code blocks or procedures in turn",
+				Reason: "No actionable code, procedure, or substantive recommendation in turn",
 			},
 		}, nil
 	}
@@ -83,7 +88,7 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 	// Build clean content: preserve rich markdown structure if formatted procedures exist,
 	// or cleanly isolate code blocks if it was conversational chatter around code.
 	var content string
-	if hasMarkdownStructure {
+	if hasMarkdownStructure || isDecision {
 		content = strings.TrimSpace(turn.Assistant)
 	} else if len(matches) > 0 {
 		var contentBuilder strings.Builder
@@ -177,8 +182,10 @@ func (h *HeuristicReconciler) Reconcile(ctx context.Context, currentCards []*car
 		}
 	}
 	cardType := card.TypeCommand
-	if len(matches) > 1 || hasSteps {
+	if hasMarkdownStructure || len(matches) > 1 {
 		cardType = card.TypeProcedure
+	} else if isDecision {
+		cardType = card.TypeDecision
 	}
 
 	// Determine title using cache first, then smart heuristic extraction
