@@ -104,6 +104,17 @@ func LoadConfig(path string) (*Config, error) {
 		return cfg, nil
 	}
 
+	// Generated configs can contain API credentials. Tighten a default config
+	// written by an older Syl version, but leave user-selected paths and
+	// symlinks under the user's own permission policy.
+	if dir, err := ConfigDir(); err == nil && filepath.Clean(path) == filepath.Join(dir, "config.yaml") {
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			if err := os.Chmod(path, 0o600); err != nil {
+				return nil, fmt.Errorf("secure config file: %w", err)
+			}
+		}
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config file: %w", err)
