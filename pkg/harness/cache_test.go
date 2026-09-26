@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -18,6 +19,9 @@ func TestTitleCache(t *testing.T) {
 
 	// Set and get
 	cache.Set("session-1", 10, "Stockholm Weather Query")
+	if info, err := os.Stat(cacheFile); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("title cache must be private (0600): info=%v err=%v", info, err)
+	}
 	got, ok := cache.Get("session-1", 10)
 	if !ok || got != "Stockholm Weather Query" {
 		t.Fatalf("expected 'Stockholm Weather Query', got %q (ok=%v)", got, ok)
@@ -42,6 +46,24 @@ func TestTitleCache(t *testing.T) {
 	got3, _ := cache2.Get("session-1", 10)
 	if got3 != "Stockholm Weather Query" {
 		t.Errorf("expected definitive title not to be downgraded by truncated fallback, got %q", got3)
+	}
+}
+
+func TestLoadingOldCacheTightensPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "titles.json")
+	if err := os.WriteFile(path, []byte(`{"session:1":"Title"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cache := NewTitleCache(path)
+	if title, ok := cache.Get("session", 1); !ok || title != "Title" {
+		t.Fatalf("could not read old cache: %q, %v", title, ok)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("old cache should become private: info=%v err=%v", info, err)
 	}
 }
 

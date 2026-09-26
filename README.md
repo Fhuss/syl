@@ -22,7 +22,7 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
 4. **Two-Way Terminal Bridge (`s`)** — Injects card references (`[Ref: Title (vN)] `) or isolated commands directly into your adjacent chat terminal or multiplexer pane (`cmux`, `tmux`) with automatic clipboard backup.
 5. **Smart Reconciler & Companion Skill** — Recognizes `[Ref: ...]` headers and smoothly appends elaborations and patched steps without losing original context. Paired with the `syl-companion` agent skill for maximum conversational symbiosis.
 6. **Zero-Config Auto-Detection** — Automatically resolves the active session and host agent harness (`agy`, `claude`, `pi`, `heuristic`).
-7. **Session Persistence** — Cards, titles, pinned state, and revision history are saved to `~/.config/syl/sessions/<session-id>.json` on every change and restored instantly on restart.
+7. **Session Persistence** — Cards, titles, pinned state, and revision history are saved privately and atomically to `~/.config/syl/sessions/<session-id>.json` on every change and restored on restart.
 
 ---
 
@@ -36,7 +36,7 @@ Toggle focus between the **`[CARDS]`** turns column and the **`[PREVIEW]`** mark
 * **In-Buffer Search**: Press **`/`** to find matches, then **`n`** / **`N`** to jump to next / previous match in the card preview.
 
 ### 📝 External Editor Roundtrip (`v` / `E`)
-Press **`v`** or **`E`** to suspend Syl and open the selected card in your external editor (`$EDITOR`, `nvim`, `vim`, or `nano`). Any edits you save are automatically synchronized back into Syl's card store and persisted upon exit.
+Press **`v`** or **`E`** to suspend Syl and open the selected card in your external editor (`$EDITOR`, `nvim`, `vim`, or `nano`). `$EDITOR` can include arguments such as `code --wait`; quote executable paths containing spaces. Any edits you save are synchronized back to the original card and persisted upon exit.
 
 ### ☑️ Interactive Markdown Task Toggle (`␣` / `Space`)
 Press **`Space`** while on a card containing task items (`- [ ]`) to automatically check off the next pending item (`- [x]`). Once all tasks are checked, pressing `Space` resets them back to unchecked for repeatable workflows.
@@ -211,6 +211,7 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 | `u` | Open card URL directly in browser |
 | `/` | Quick search & filter cards interactively |
 | `S` | Switch active conversation session without quitting |
+| `R` | Retry failed card capture (later turns wait until it succeeds) |
 | `c` | Copy code snippet(s) from card to clipboard |
 | `C` / `y` | Copy full card markdown to clipboard |
 | `r` | Toggle raw text mode (clean for mouse selection) |

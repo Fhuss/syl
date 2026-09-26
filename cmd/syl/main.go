@@ -56,6 +56,7 @@ Keys in TUI:
   [u]          Open card URL directly in browser
   [/]          Quick search & filter cards interactively
   [S]          Switch active conversation session (Antigravity/Claude/Pi)
+  [R]          Retry failed card capture before processing later turns
   [c]          Copy card code snippet(s) to system clipboard
   [C / y]      Copy full card markdown content to clipboard
   [r]          Toggle raw text mode (clean for mouse selection)

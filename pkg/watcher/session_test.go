@@ -169,6 +169,33 @@ func TestSelectAutoSession(t *testing.T) {
 	})
 }
 
+func TestFindSessionByIDBeyondRecentHundred(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".pi", "agent", "sessions", "--project--")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "2026-01-01T00-00-00-000Z_old-session.jsonl")
+	if err := os.WriteFile(old, []byte("{\"type\":\"session\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	then := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(old, then, then); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 120 {
+		path := filepath.Join(dir, fmt.Sprintf("2026-09-26T12-00-00-%03dZ_new-%03d.jsonl", i, i))
+		if err := os.WriteFile(path, []byte("{\"type\":\"session\"}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session, err := FindSessionByID("old-session")
+	if err != nil || session == nil || session.Path != old {
+		t.Fatalf("old explicit session must be found: %+v, %v", session, err)
+	}
+}
+
 func TestDetectAgentFromPath(t *testing.T) {
 	tests := []struct {
 		path     string

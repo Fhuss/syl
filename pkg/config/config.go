@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Fhuss/syl/internal/atomicfile"
 )
 
 type Config struct {
@@ -126,5 +128,5 @@ func SaveDefaultConfig(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	return atomicfile.Write(path, data)
 }

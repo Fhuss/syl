@@ -2,8 +2,21 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestSaveDefaultConfigIsPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("GEMINI_API_KEY", "test-secret")
+	if err := SaveDefaultConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("config containing credentials must be private: info=%v err=%v", info, err)
+	}
+}
 
 func TestDefaultConfigEnvFallbacks(t *testing.T) {
 	// 1. None set -> mock
