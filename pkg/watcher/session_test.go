@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractSessionTitle(t *testing.T) {
@@ -116,6 +117,58 @@ func TestListSessionsWithCustomDir(t *testing.T) {
 	}
 }
 
+func TestSelectAutoSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_SESSION_FILE", "")
+	cwd := filepath.Join(home, "project")
+	other := filepath.Join(home, "other")
+	writePi := func(dir, id, title string) string {
+		t.Helper()
+		folder := filepath.Join(home, ".pi", "agent", "sessions", "--"+filepath.Base(dir)+"--")
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(folder, "2026-09-26T12-00-00-000Z_"+id+".jsonl")
+		data := fmt.Sprintf("{\"type\":\"session\",\"cwd\":%q}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":%q}}\n", dir, title)
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	mine := writePi(cwd, "my-session", "My session")
+	newer := writePi(other, "other-session", "Other session")
+	if err := os.Chtimes(mine, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("same cwd beats newer global session", func(t *testing.T) {
+		session, err := SelectAutoSession(cwd, "")
+		if err != nil || session == nil || session.Path != mine {
+			t.Fatalf("got %+v, %v; want %s", session, err, mine)
+		}
+	})
+	t.Run("peer checkpoint beats cwd", func(t *testing.T) {
+		session, err := SelectAutoSession(cwd, newer)
+		if err != nil || session == nil || session.Path != newer || session.ID != "other-session" {
+			t.Fatalf("got %+v, %v; want peer %s", session, err, newer)
+		}
+	})
+	t.Run("pi env beats peer", func(t *testing.T) {
+		t.Setenv("PI_SESSION_FILE", mine)
+		session, err := SelectAutoSession(cwd, newer)
+		if err != nil || session == nil || session.Path != mine {
+			t.Fatalf("got %+v, %v; want %s", session, err, mine)
+		}
+	})
+	t.Run("missing checkpoint falls back to cwd", func(t *testing.T) {
+		session, err := SelectAutoSession(cwd, filepath.Join(home, ".pi", "missing.jsonl"))
+		if err != nil || session == nil || session.Path != mine {
+			t.Fatalf("got %+v, %v; want %s", session, err, mine)
+		}
+	})
+}
+
 func TestDetectAgentFromPath(t *testing.T) {
 	tests := []struct {
 		path     string
@@ -134,5 +187,3 @@ func TestDetectAgentFromPath(t *testing.T) {
 		}
 	}
 }
-
-
