@@ -893,5 +893,66 @@ func TestModelHelpModalActionShortcuts(t *testing.T) {
 	}
 }
 
+func TestModelBlockPickerOpenFile(t *testing.T) {
+	// Create a temp file to test opening
+	tmpFile, err := os.CreateTemp("", "syl-test-*.go")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	_ = tmpFile.Close()
+
+	store := card.NewStore()
+	store.Add(&card.Card{
+		ID:      "c-file",
+		Title:   "File Card",
+		Content: fmt.Sprintf("Please review the code in: %s and also /nonexistent/path/file.py", tmpFile.Name()),
+	})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 30
+	m.updateViewportSize()
+
+	// Open block picker
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = u.(*Model)
+
+	if !m.showBlockPicker {
+		t.Fatalf("expected showBlockPicker to be true")
+	}
+	if len(m.activeBlocks) < 2 {
+		t.Fatalf("expected at least 2 file blocks, got %d", len(m.activeBlocks))
+	}
+
+	// First block is the real temp file
+	if m.activeBlocks[0].Type != card.BlockFile {
+		t.Fatalf("expected BlockFile, got %s", m.activeBlocks[0].Type)
+	}
+
+	// Press 'o' on the first block (existing file)
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = u.(*Model)
+
+	if m.showBlockPicker {
+		t.Fatalf("expected showBlockPicker to close after action")
+	}
+	if !strings.HasPrefix(m.toast, "✓ Opened") {
+		t.Fatalf("expected toast '✓ Opened...', got %q", m.toast)
+	}
+
+	// Re-open block picker and test non-existent file
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = u.(*Model)
+	m.selectedBlockIdx = 1 // select /nonexistent/path/file.py
+
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	m = u.(*Model)
+
+	if !strings.HasPrefix(m.toast, "⚠ File not found") {
+		t.Fatalf("expected toast '⚠ File not found...', got %q", m.toast)
+	}
+}
+
 
 

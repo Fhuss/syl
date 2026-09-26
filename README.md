@@ -33,7 +33,8 @@ Press **`b`** on any card to open the actionable block modal:
 * **Code Blocks:** Tagged by language (`[BASH]`, `[SQL]`, `[DOCKER]`, `[YAML]`).
 * **Numbered Steps:** Extracts inline commands from steps (e.g. `[STEP 2]`).
 * **URLs:** Direct links (`[URL]`).
-* **Key Actions:** Press **`1`**–**`9`** or **`0`** for instant 1-key yank to clipboard, **`s`** to send to your active terminal surface, or **`o`** to open in your browser.
+* **Files:** Detects workspace files, `file://` links, and paths (`[GO]`, `[PY]`, `[TS]`, `[YAML]`, `[FILE]`).
+* **Key Actions:** Press **`1`**–**`9`** or **`0`** for instant 1-key yank to clipboard, **`s`** to send to your active terminal surface, or **`o`** to open URLs in your browser or preview files with your default application.
 
 ### 🌐 Direct Browser Opener (`u`)
 Press **`u`** to immediately launch detected URLs in your default browser (`open <url>`). If multiple URLs exist, opens a quick selector.

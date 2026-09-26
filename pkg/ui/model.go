@@ -545,7 +545,7 @@ func (m *Model) actionToggleBlockPicker() {
 	}
 	blocks := card.ExtractActionBlocks(cards[m.selectedIndex].Content)
 	if len(blocks) == 0 {
-		m.toast = "No code blocks, steps, or URLs found in this card"
+		m.toast = "No code blocks, steps, URLs, or files found in this card"
 		return
 	}
 	m.activeBlocks = blocks
@@ -591,19 +591,53 @@ func (m *Model) actionOpenBlockURL(idx int) tea.Cmd {
 		return nil
 	}
 	blk := m.activeBlocks[idx]
-	if blk.Type != card.BlockURL {
+	switch blk.Type {
+	case card.BlockURL:
+		if err := openURL(blk.Content); err == nil {
+			m.toast = fmt.Sprintf("✓ Opened %s in browser!", blk.Preview)
+		} else {
+			m.toast = fmt.Sprintf("Failed to open URL: %v", err)
+		}
+	case card.BlockFile:
+		return m.actionOpenFile(blk.Content)
+	default:
 		return nil
-	}
-	if err := openURL(blk.Content); err == nil {
-		m.toast = fmt.Sprintf("✓ Opened %s in browser!", blk.Preview)
-	} else {
-		m.toast = fmt.Sprintf("Failed to open URL: %v", err)
 	}
 	m.showBlockPicker = false
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return ClearToastMsg{}
 	})
 }
+
+// actionOpenFile opens or previews a file path using the system's default handler.
+func (m *Model) actionOpenFile(path string) tea.Cmd {
+	// Check if the file exists
+	info, err := os.Stat(path)
+	if err != nil {
+		m.toast = fmt.Sprintf("⚠ File not found: %s", filepath.Base(path))
+		m.showBlockPicker = false
+		return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
+	}
+
+	// Use system open to preview/open the file
+	if err := openURL(path); err == nil {
+		kind := "file"
+		if info.IsDir() {
+			kind = "directory"
+		}
+		m.toast = fmt.Sprintf("✓ Opened %s (%s)", filepath.Base(path), kind)
+	} else {
+		m.toast = fmt.Sprintf("Failed to open file: %v", err)
+	}
+	m.showBlockPicker = false
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+
 
 func (m *Model) actionOpenURL() tea.Cmd {
 	cards := m.store.List()
@@ -787,7 +821,7 @@ func (m *Model) buildBlockPickerModal() string {
 
 	sub := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Render("Press 1-9 to yank instantly, Enter to copy, s to send next door, o to open URL")
+		Render("Press 1-9 to yank instantly, Enter to copy, s to send, o to open URL/file")
 
 	var b strings.Builder
 	b.WriteString(title + "\n" + sub + "\n\n")
@@ -814,6 +848,8 @@ func (m *Model) buildBlockPickerModal() string {
 				badgeBg = ColorWarning
 			case card.BlockURL:
 				badgeBg = ColorPrimary
+			case card.BlockFile:
+				badgeBg = ColorDanger
 			}
 			badgeStyle := lipgloss.NewStyle().
 				Bold(true).
@@ -846,7 +882,7 @@ func (m *Model) buildBlockPickerModal() string {
 	footer := lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Italic(true).
-		Render("[1-9] Quick Yank • [Enter] Yank • [s] Send to Peer • [o] Open URL • [Esc] Close")
+		Render("[1-9] Quick Yank • [Enter] Yank • [s] Send to Peer • [o] Open URL/File • [Esc] Close")
 	b.WriteString(footer)
 
 	modalBox := lipgloss.NewStyle().

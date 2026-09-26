@@ -76,3 +76,71 @@ func TestExtractActionBlocksKeyLimits(t *testing.T) {
 		t.Errorf("expected empty key for block 11, got %q", blocks[10].Key)
 	}
 }
+
+func TestExtractActionBlocksWithFiles(t *testing.T) {
+	markdown := `
+Review the configuration files:
+- Inspect the server entry: [server.go](file:///Users/fabian/Dev/syl/cmd/syl/main.go#L1-L20)
+- Check ~/.config/syl/config.yaml for provider settings.
+- The build script is located at /etc/nginx/nginx.conf.
+`
+
+	blocks := ExtractActionBlocks(markdown)
+	if len(blocks) < 3 {
+		t.Fatalf("expected at least 3 file blocks, got %d", len(blocks))
+	}
+
+	foundGo := false
+	foundYaml := false
+	foundConf := false
+
+	for _, b := range blocks {
+		if b.Type == BlockFile {
+			switch b.Badge {
+			case "GO":
+				foundGo = true
+				if b.Content != "/Users/fabian/Dev/syl/cmd/syl/main.go" {
+					t.Errorf("expected stripped line fragment, got %q", b.Content)
+				}
+			case "YAML":
+				foundYaml = true
+			case "CONF":
+				foundConf = true
+				if b.Content != "/etc/nginx/nginx.conf" {
+					t.Errorf("expected /etc/nginx/nginx.conf, got %q", b.Content)
+				}
+			}
+		}
+	}
+
+	if !foundGo {
+		t.Errorf("expected to extract GO file block")
+	}
+	if !foundYaml {
+		t.Errorf("expected to extract YAML file block")
+	}
+	if !foundConf {
+		t.Errorf("expected to extract CONF file block")
+	}
+}
+
+func TestFileBadgeResolution(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"/app/main.go", "GO"},
+		{"/app/script.py", "PY"},
+		{"/app/index.ts", "TS"},
+		{"/app/Dockerfile", "DOCKER"},
+		{"/app/Makefile", "MAKE"},
+		{"/app/unknown.xyz", "FILE"},
+	}
+
+	for _, tt := range tests {
+		got := fileBadge(tt.path)
+		if got != tt.expected {
+			t.Errorf("fileBadge(%q) = %q, expected %q", tt.path, got, tt.expected)
+		}
+	}
+}
