@@ -60,6 +60,7 @@ type ClearToastMsg struct{}
 type Button struct {
 	Label  string
 	Action string
+	Row    int
 	X1     int
 	X2     int
 }
@@ -257,6 +258,8 @@ func (m *Model) updateViewportSize() {
 		return
 	}
 
+	barLines := m.getActionBarLines()
+
 	var wrapWidth int
 	var vpHeight int
 
@@ -265,7 +268,8 @@ func (m *Model) updateViewportSize() {
 		if wrapWidth < 25 {
 			wrapWidth = 25
 		}
-		vpHeight = m.height - 6 // accounting for focus banner and hints
+		// Accounting for header, focus banner, action bar lines, hints, and borders
+		vpHeight = m.height - 5 - barLines
 		if vpHeight < 5 {
 			vpHeight = 5
 		}
@@ -275,7 +279,8 @@ func (m *Model) updateViewportSize() {
 		if wrapWidth < 25 {
 			wrapWidth = 25
 		}
-		vpHeight = m.height - 5
+		// Accounting for header, action bar lines, hints, and borders
+		vpHeight = m.height - 4 - barLines
 		if vpHeight < 5 {
 			vpHeight = 5
 		}
@@ -929,64 +934,88 @@ func (m *Model) buildSessionSwitcherModal() string {
 }
 
 func (m *Model) buildHelpModal() string {
-	boxWidth := 74
-	if m.width > 20 && m.width < 78 {
+	boxWidth := 76
+	if m.width > 20 && m.width < 80 {
 		boxWidth = m.width - 4
 	}
 
-	compact := m.height < 28
+	compact := m.height < 32
 
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
 		Render("✨ SYL COMMAND REFERENCE & SHORTCUTS")
 
-	colKey := lipgloss.NewStyle().Bold(true).Foreground(ColorSuccess).Width(17)
-	colDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("#ECEFF4"))
-	secHeader := lipgloss.NewStyle().Bold(true).Foreground(ColorWarning)
+	subtitle := lipgloss.NewStyle().
+		Foreground(ColorMuted).
+		Render("Actionable Command Badges • Press any shortcut key to trigger directly")
+
+	secHeader := func(emoji, name string) string {
+		return lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render(emoji + " " + name)
+	}
+
+	renderBadgeRow := func(key string, keyStyle lipgloss.Style, actionTitle, desc string) string {
+		keyPill := keyStyle.Render(fmt.Sprintf("%-5s", key))
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ECEFF4"))
+		titleStr := titleStyle.Render(fmt.Sprintf("%-16s", actionTitle))
+
+		availDesc := boxWidth - lipgloss.Width(keyPill) - lipgloss.Width(titleStr) - 7
+		if availDesc > 4 && len(desc) > availDesc {
+			desc = desc[:availDesc-1] + "…"
+		}
+		descStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#9AA4B2")).Render(desc)
+
+		if boxWidth < 55 {
+			return keyPill + " " + titleStr
+		}
+		return keyPill + " " + titleStr + " " + descStr
+	}
 
 	var b strings.Builder
 	b.WriteString(title + "\n")
+	b.WriteString(subtitle + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(secHeader.Render("Navigation & Preview") + "\n")
-	b.WriteString(colKey.Render("j / k, ← / →") + colDesc.Render("Switch active reference turn/card") + "\n")
-	b.WriteString(colKey.Render("↑ / ↓") + colDesc.Render("Scroll card preview content smoothly") + "\n")
-	b.WriteString(colKey.Render("PgUp / PgDn") + colDesc.Render("Scroll preview half-page up / down") + "\n")
-	b.WriteString(colKey.Render("g / G") + colDesc.Render("Jump to top / bottom of card preview") + "\n")
+	// 1. Actions & Workflow
+	b.WriteString(secHeader("🚀", "Workflow & Multiplexer") + "\n")
+	b.WriteString(renderBadgeRow("s", BadgeKeyPrimary, "Send to Surface", "Send [Ref: ...] reference to active cmux/tmux pane") + "\n")
+	b.WriteString(renderBadgeRow("b", BadgeKeyPrimary, "Step Picker", "Surgical block picker (yank 1-9, run in shell)") + "\n")
+	b.WriteString(renderBadgeRow("c", BadgeKeySuccess, "Copy Code", "Copy extracted code block(s) to clipboard") + "\n")
+	b.WriteString(renderBadgeRow("C / y", BadgeKeySuccess, "Copy All", "Copy full card markdown content to clipboard") + "\n")
+	b.WriteString(renderBadgeRow("u", BadgeKeySuccess, "Open URL", "Open primary card documentation link in browser") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(secHeader.Render("View Modes") + "\n")
-	b.WriteString(colKey.Render("Tab / Enter") + colDesc.Render("Toggle Focus View (hide/show turns column)") + "\n")
-	b.WriteString(colKey.Render("r") + colDesc.Render("Toggle Raw text mode (for clean mouse select)") + "\n")
-	b.WriteString(colKey.Render("h") + colDesc.Render("Toggle card version revision history") + "\n")
+	// 2. View & Display Modes
+	b.WriteString(secHeader("👁", "View & Display Modes") + "\n")
+	b.WriteString(renderBadgeRow("Tab", BadgeKeySecondary, "Focus / Split", "Toggle Focus View (hide/show turns column)") + "\n")
+	b.WriteString(renderBadgeRow("r", BadgeKeySecondary, "Raw / Rendered", "Toggle Raw text mode (for clean mouse select)") + "\n")
+	b.WriteString(renderBadgeRow("h", BadgeKeySecondary, "Version Diff", "Toggle card version revision history") + "\n")
+	b.WriteString(renderBadgeRow("g / G", BadgeKeySecondary, "Top / Bottom", "Jump directly to top or bottom of card preview") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(secHeader.Render("Clipboard & Actions") + "\n")
-	b.WriteString(colKey.Render("b") + colDesc.Render("Surgical Block/Step picker (yank 1-9, run)") + "\n")
-	b.WriteString(colKey.Render("u") + colDesc.Render("Open card URL directly in web browser") + "\n")
-	b.WriteString(colKey.Render("/") + colDesc.Render("Search & filter reference cards") + "\n")
-	b.WriteString(colKey.Render("S") + colDesc.Render("Switch active conversation session") + "\n")
-	b.WriteString(colKey.Render("c") + colDesc.Render("Copy extracted code block(s) to clipboard") + "\n")
-	b.WriteString(colKey.Render("C / y") + colDesc.Render("Copy full card markdown content") + "\n")
-	b.WriteString(colKey.Render("p") + colDesc.Render("Pin / unpin card (protect from pruning)") + "\n")
-	b.WriteString(colKey.Render("x / d") + colDesc.Render("Drop / delete card from reference pane") + "\n")
-	b.WriteString(colKey.Render("e") + colDesc.Render("Export session reference cards to markdown") + "\n")
-	b.WriteString(colKey.Render("s") + colDesc.Render("Send card context to chat surface (cmux)") + "\n")
+	// 3. Session & Card Management
+	b.WriteString(secHeader("🗂", "Session & Organization") + "\n")
+	b.WriteString(renderBadgeRow("/", BadgeKeyWarning, "Find Cards", "Search & filter reference cards interactively") + "\n")
+	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Switch active conversation session (agy, claude, codex)") + "\n")
+	b.WriteString(renderBadgeRow("p", BadgeKeyWarning, "Pin Card", "Pin / unpin card (protect from pruning)") + "\n")
+	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
+	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop / delete card from reference pane") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(secHeader.Render("Mouse & General") + "\n")
-	b.WriteString(colKey.Render("Click / Wheel") + colDesc.Render("Click action pills or turns; wheel to scroll") + "\n")
-	b.WriteString(colKey.Render("? / F1") + colDesc.Render("Toggle this help reference glossary") + "\n")
-	b.WriteString(colKey.Render("q / Esc") + colDesc.Render("Close help modal / Quit syl") + "\n")
+	// 4. Navigation & Control
+	b.WriteString(secHeader("🧭", "Navigation & Control") + "\n")
+	b.WriteString(renderBadgeRow("j / k", BadgeKeyMuted, "Next / Prev Card", "Switch active reference turn/card (or ← / →)") + "\n")
+	b.WriteString(renderBadgeRow("↑ / ↓", BadgeKeyMuted, "Scroll Content", "Scroll card preview content smoothly") + "\n")
+	b.WriteString(renderBadgeRow("? / F1", BadgeKeyMuted, "Help Palette", "Toggle this command reference glossary") + "\n")
+	b.WriteString(renderBadgeRow("q / Esc", BadgeKeyMuted, "Close / Quit", "Close help modal / Quit syl") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -994,7 +1023,7 @@ func (m *Model) buildHelpModal() string {
 	footer := lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Italic(true).
-		Render("Press [?], [Esc], [Enter], or click anywhere to close")
+		Render("Press any command key to run • [?], [Esc], [Enter], or click to close")
 	b.WriteString(footer)
 
 	paddingY := 1
@@ -1362,21 +1391,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if msg.Button == tea.MouseButtonLeft {
-				// 1. Check Action Bar clicks (Row 1)
-				if msg.Y == 1 {
+				barLines := m.getActionBarLines()
+				// 1. Check Action Bar clicks (Rows 1 .. barLines)
+				if msg.Y >= 1 && msg.Y <= barLines {
+					targetRow := msg.Y - 1
 					for _, btn := range m.buttons {
-						if msg.X >= btn.X1 && msg.X <= btn.X2 {
+						if btn.Row == targetRow && msg.X >= btn.X1 && msg.X <= btn.X2 {
 							cmd := m.handleButtonAction(btn.Action)
 							return m, cmd
 						}
 					}
 				}
 
-				// 2. In Split mode: Check Card List clicks (Row >= 2, X <= leftColWidth)
+				// 2. In Split mode: Check Card List clicks
+				cardListStartY := 1 + barLines
 				if m.viewMode != ModeDetail {
 					leftColWidth := m.getLeftColWidth()
-					if msg.Y >= 2 && msg.X <= leftColWidth {
-						cardIdx := m.cardListOffset + (msg.Y - 2)
+					if msg.Y >= cardListStartY && msg.X <= leftColWidth {
+						cardIdx := m.cardListOffset + (msg.Y - cardListStartY)
 						cards := m.store.List()
 						if cardIdx >= 0 && cardIdx < len(cards) {
 							if m.selectedIndex == cardIdx {
@@ -1423,8 +1455,76 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.showHelp {
 			switch msg.String() {
-			case "?", "f1", "esc", "q", "enter", " ", "tab":
+			case "?", "f1", "esc", "q", "enter", " ":
 				m.showHelp = false
+				return m, nil
+			case "s":
+				m.showHelp = false
+				return m, m.actionSend()
+			case "b":
+				m.showHelp = false
+				m.actionToggleBlockPicker()
+				return m, nil
+			case "c":
+				m.showHelp = false
+				return m, m.actionCopy()
+			case "C", "y":
+				m.showHelp = false
+				return m, m.actionCopyAll()
+			case "p":
+				m.showHelp = false
+				return m, m.actionPin()
+			case "/":
+				m.showHelp = false
+				m.searchMode = true
+				m.searchQuery = ""
+				m.searchSavedIdx = m.selectedIndex
+				return m, nil
+			case "S":
+				m.showHelp = false
+				if !m.isDemo {
+					if sessions, err := watcher.ListSessions(12); err == nil && len(sessions) > 0 {
+						m.sessionList = sessions
+						m.selectedSessionIdx = 0
+						m.showSessionSwitcher = true
+					}
+				}
+				return m, nil
+			case "r":
+				m.showHelp = false
+				m.actionToggleRaw()
+				return m, nil
+			case "e":
+				m.showHelp = false
+				return m, m.actionExport()
+			case "x", "d":
+				m.showHelp = false
+				return m, m.actionDrop()
+			case "h":
+				m.showHelp = false
+				m.actionToggleHistory()
+				return m, nil
+			case "tab":
+				m.showHelp = false
+				m.actionToggleFocus()
+				return m, nil
+			case "u":
+				m.showHelp = false
+				return m, m.actionOpenURL()
+			case "j", "down", "right":
+				m.showHelp = false
+				cards := m.store.List()
+				if m.selectedIndex < len(cards)-1 {
+					m.selectedIndex++
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "k", "up", "left":
+				m.showHelp = false
+				if m.selectedIndex > 0 {
+					m.selectedIndex--
+					m.updateViewportContent()
+				}
 				return m, nil
 			default:
 				return m, nil
@@ -1661,95 +1761,248 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) renderActionBar() string {
-	var b strings.Builder
-	m.buttons = make([]Button, 0)
-	currX := 1
+type actionBadge struct {
+	labelCompact string
+	labelFull    string
+	action       string
+	style        lipgloss.Style
+}
 
-	addButton := func(label, action string, style lipgloss.Style) {
-		rendered := style.Render(label)
-		width := lipgloss.Width(rendered)
-		m.buttons = append(m.buttons, Button{
-			Label:  label,
-			Action: action,
-			X1:     currX,
-			X2:     currX + width,
-		})
-		b.WriteString(rendered)
-		b.WriteString(" ")
-		currX += width + 1
-	}
+func (m *Model) getActionBarBadges() []actionBadge {
+	var badges []actionBadge
 
 	// 1. Focus / Split toggle
 	if m.viewMode == ModeDetail {
-		addButton("☰ Show Turns (Tab)", "toggle_focus", BtnHoverStyle)
+		badges = append(badges, actionBadge{
+			labelCompact: "Tab Split",
+			labelFull:    "☰ Show Turns (Tab)",
+			action:       "toggle_focus",
+			style:        BtnHoverStyle,
+		})
 	} else {
-		addButton("👁 Hide Turns (Tab)", "toggle_focus", BtnStyle)
+		badges = append(badges, actionBadge{
+			labelCompact: "Tab Focus",
+			labelFull:    "👁 Hide Turns (Tab)",
+			action:       "toggle_focus",
+			style:        BtnStyle,
+		})
 	}
 
-	// 2. Copy Code & Surgical Blocks
-	addButton("📋 Copy (c)", "copy", BtnStyle)
-	addButton("📦 Steps (b)", "block_picker", BtnStyle)
+	// 2. Steps (b)
+	badges = append(badges, actionBadge{
+		labelCompact: "b Steps",
+		labelFull:    "📦 Steps (b)",
+		action:       "block_picker",
+		style:        BtnStyle,
+	})
 
-	// 3. Copy All (when width allows)
-	if m.width >= 90 {
-		addButton("📄 All (C)", "copy_all", BtnStyle)
+	// 3. Send (s) - Primary workflow command
+	badges = append(badges, actionBadge{
+		labelCompact: "s Send",
+		labelFull:    "🚀 Send (s)",
+		action:       "send",
+		style:        BtnStyle,
+	})
+
+	// 4. Copy Code (c)
+	badges = append(badges, actionBadge{
+		labelCompact: "c Copy",
+		labelFull:    "📋 Copy (c)",
+		action:       "copy",
+		style:        BtnStyle,
+	})
+
+	// 5. Pin (p)
+	badges = append(badges, actionBadge{
+		labelCompact: "p Pin",
+		labelFull:    "📌 Pin (p)",
+		action:       "pin",
+		style:        BtnStyle,
+	})
+
+	// 6. Search (/)
+	badges = append(badges, actionBadge{
+		labelCompact: "/ Find",
+		labelFull:    "🔍 Find (/)",
+		action:       "search",
+		style:        BtnStyle,
+	})
+
+	// 7. Sessions (S)
+	if !m.isDemo {
+		badges = append(badges, actionBadge{
+			labelCompact: "S Switch",
+			labelFull:    "🔄 Switch (S)",
+			action:       "sessions",
+			style:        BtnStyle,
+		})
 	}
 
-	// 4. Raw text toggle
+	// 8. Raw toggle (r)
 	if m.showRaw {
-		addButton("🎨 Rendered (r)", "toggle_raw", BtnHoverStyle)
+		badges = append(badges, actionBadge{
+			labelCompact: "r View",
+			labelFull:    "🎨 Rendered (r)",
+			action:       "toggle_raw",
+			style:        BtnHoverStyle,
+		})
 	} else {
-		addButton("📝 Raw (r)", "toggle_raw", BtnStyle)
+		badges = append(badges, actionBadge{
+			labelCompact: "r Raw",
+			labelFull:    "📝 Raw (r)",
+			action:       "toggle_raw",
+			style:        BtnStyle,
+		})
 	}
 
-	// 5. Pin & Drop
-	addButton("📌 Pin (p)", "pin", BtnStyle)
-	addButton("🗑 Drop (x)", "drop", BtnStyle)
-
-	// 6. Search & Sessions (when width allows)
-	if m.width >= 100 {
-		addButton("🔍 Find (/)", "search", BtnStyle)
-		if !m.isDemo {
-			addButton("🔄 Switch (S)", "sessions", BtnStyle)
-		}
+	// 9. History (h)
+	histStyle := BtnStyle
+	if m.viewMode == ModeHistory {
+		histStyle = BtnHoverStyle
 	}
+	badges = append(badges, actionBadge{
+		labelCompact: "h Hist",
+		labelFull:    "📜 History (h)",
+		action:       "history",
+		style:        histStyle,
+	})
 
-	// 7. Export (when width allows)
-	if m.width >= 115 {
-		addButton("💾 Export (e)", "export", BtnStyle)
-	}
+	// 10. Export (e)
+	badges = append(badges, actionBadge{
+		labelCompact: "e Export",
+		labelFull:    "💾 Export (e)",
+		action:       "export",
+		style:        BtnStyle,
+	})
 
-	// 8. History (when width allows)
-	if m.width >= 130 {
-		if m.viewMode == ModeHistory {
-			addButton("📜 History (h)", "history", BtnHoverStyle)
-		} else {
-			addButton("📜 History (h)", "history", BtnStyle)
-		}
-	}
+	// 11. Drop (x)
+	badges = append(badges, actionBadge{
+		labelCompact: "x Drop",
+		labelFull:    "🗑 Drop (x)",
+		action:       "drop",
+		style:        BtnStyle,
+	})
 
-	// 8. Send (when width allows)
-	if m.width >= 120 {
-		addButton("🚀 Send (s)", "send", BtnStyle)
-	}
-
-	// 9. Help modal
+	// 12. Help / Command Palette (?)
+	helpStyle := BtnStyle
 	if m.showHelp {
-		addButton("❓ Help (?)", "help", BtnHoverStyle)
-	} else {
-		addButton("❓ Help (?)", "help", BtnStyle)
+		helpStyle = BtnHoverStyle
 	}
+	badges = append(badges, actionBadge{
+		labelCompact: "? Help",
+		labelFull:    "❓ Help (?)",
+		action:       "help",
+		style:        helpStyle,
+	})
 
-	// 10. Demo next turn
+	// 13. Demo next (Space)
 	if m.isDemo {
-		addButton("⏩ Next (Space)", "demo_next", BtnHoverStyle)
+		badges = append(badges, actionBadge{
+			labelCompact: "Space Next",
+			labelFull:    "⏩ Next (Space)",
+			action:       "demo_next",
+			style:        BtnHoverStyle,
+		})
 	}
 
-	// 11. Quit
-	addButton("✕ Quit (q)", "quit", BtnDangerStyle)
+	// 14. Quit (q)
+	badges = append(badges, actionBadge{
+		labelCompact: "q Quit",
+		labelFull:    "✕ Quit (q)",
+		action:       "quit",
+		style:        BtnDangerStyle,
+	})
 
-	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
+	return badges
+}
+
+func (m *Model) getActionBarLines() int {
+	w := m.width
+	if w <= 0 {
+		return 1
+	}
+	availWidth := w - 2
+	if availWidth < 20 {
+		availWidth = 20
+	}
+
+	badges := m.getActionBarBadges()
+	useCompact := w < 130
+
+	lines := 1
+	currX := 1
+	for _, b := range badges {
+		label := b.labelFull
+		if useCompact {
+			label = b.labelCompact
+		}
+		btnW := lipgloss.Width(b.style.Render(label))
+		if currX+btnW > availWidth && currX > 1 {
+			lines++
+			currX = 1
+		}
+		currX += btnW + 1
+	}
+	return lines
+}
+
+func (m *Model) renderActionBar() string {
+	m.buttons = make([]Button, 0)
+	w := m.width
+	if w <= 0 {
+		w = 80
+	}
+	availWidth := w - 2
+	if availWidth < 20 {
+		availWidth = 20
+	}
+
+	badges := m.getActionBarBadges()
+	useCompact := w < 130
+
+	var rows []string
+	var curRow strings.Builder
+	currX := 1
+	rowIdx := 0
+
+	for _, b := range badges {
+		label := b.labelFull
+		if useCompact {
+			label = b.labelCompact
+		}
+		rendered := b.style.Render(label)
+		btnW := lipgloss.Width(rendered)
+
+		if currX+btnW > availWidth && currX > 1 {
+			rows = append(rows, curRow.String())
+			curRow.Reset()
+			rowIdx++
+			currX = 1
+		}
+
+		m.buttons = append(m.buttons, Button{
+			Label:  label,
+			Action: b.action,
+			Row:    rowIdx,
+			X1:     currX,
+			X2:     currX + btnW,
+		})
+
+		curRow.WriteString(rendered)
+		curRow.WriteString(" ")
+		currX += btnW + 1
+	}
+
+	if curRow.Len() > 0 {
+		rows = append(rows, curRow.String())
+	}
+
+	paddedRows := make([]string, len(rows))
+	for i, r := range rows {
+		paddedRows[i] = lipgloss.NewStyle().Padding(0, 1).Render(r)
+	}
+
+	return strings.Join(paddedRows, "\n")
 }
 
 func (m *Model) renderBaseView() string {
@@ -1824,15 +2077,15 @@ func (m *Model) renderBaseView() string {
 		hintText = fmt.Sprintf("🔍 Search cards: %s_  [%d matches]  (Enter: Keep • Esc: Cancel • ↑/↓: Next/Prev)", m.searchQuery, matches)
 	} else if m.width < 90 {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 Tab: Show • b: Steps • /: Search • ?: Help • q: Quit"
+			hintText = "💡 Tab: Show • b: Steps • s: Send • c: Copy • /: Search • ?: Palette • q: Quit"
 		} else {
-			hintText = "💡 Tab: Hide • b: Steps • /: Search • ?: Help • q: Quit"
+			hintText = "💡 Tab: Hide • b: Steps • s: Send • c: Copy • /: Search • ?: Palette • q: Quit"
 		}
 	} else {
 		if m.viewMode == ModeDetail {
-			hintText = "💡 ↑/↓: Scroll • j/k: Turn • b: Steps • c: Copy • /: Search • S: Sessions • ?: Help"
+			hintText = "💡 ↑/↓: Scroll • j/k: Turn • b: Steps • s: Send • c: Copy • /: Search • S: Sessions • ?: Palette"
 		} else {
-			hintText = "💡 ↑/↓: Scroll • j/k: Turn • Tab: Focus • b: Steps • c: Copy • /: Search • S: Sessions • ?: Help"
+			hintText = "💡 ↑/↓: Scroll • j/k: Turn • Tab: Focus • b: Steps • s: Send • c: Copy • /: Search • S: Sessions • ?: Palette"
 		}
 	}
 	hints := FooterStyle.Render(hintText)

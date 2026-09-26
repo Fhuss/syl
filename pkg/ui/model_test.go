@@ -748,4 +748,150 @@ func TestModelSessionSwitcherToggle(t *testing.T) {
 	}
 }
 
+func TestModelResponsiveActionBarWrapping(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Test Card", Content: "echo test"})
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+
+	// 1. Narrow width (80 columns, standard split)
+	m.width = 80
+	m.height = 30
+	m.updateViewportSize()
+	bar := m.renderActionBar()
+
+	lines := m.getActionBarLines()
+	if lines < 2 {
+		t.Fatalf("expected at least 2 rows for 80-col width, got %d", lines)
+	}
+	barLinesCount := strings.Count(bar, "\n") + 1
+	if barLinesCount != lines {
+		t.Fatalf("rendered action bar lines (%d) != getActionBarLines (%d)", barLinesCount, lines)
+	}
+
+	// Verify crucial actions are NOT hidden on 80 cols
+	hasSend := false
+	hasSteps := false
+	hasFind := false
+	hasPin := false
+	for _, btn := range m.buttons {
+		if btn.Action == "send" {
+			hasSend = true
+		}
+		if btn.Action == "block_picker" {
+			hasSteps = true
+		}
+		if btn.Action == "search" {
+			hasFind = true
+		}
+		if btn.Action == "pin" {
+			hasPin = true
+		}
+	}
+	if !hasSend {
+		t.Fatalf("expected 'send' action button to be present on 80-col terminal")
+	}
+	if !hasSteps {
+		t.Fatalf("expected 'block_picker' action button to be present on 80-col terminal")
+	}
+	if !hasFind {
+		t.Fatalf("expected 'search' action button to be present on 80-col terminal")
+	}
+	if !hasPin {
+		t.Fatalf("expected 'pin' action button to be present on 80-col terminal")
+	}
+
+	// 2. Very narrow width (50 columns)
+	m.width = 50
+	m.updateViewportSize()
+	narrowLines := m.getActionBarLines()
+	if narrowLines < 3 {
+		t.Fatalf("expected at least 3 rows for 50-col width, got %d", narrowLines)
+	}
+
+	// 3. Wide width (180 columns)
+	m.width = 180
+	m.updateViewportSize()
+	wideLines := m.getActionBarLines()
+	if wideLines > 2 {
+		t.Fatalf("expected <= 2 rows for wide 180-col screen, got %d", wideLines)
+	}
+}
+
+func TestModelActionBarMultiRowMouseClick(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Card 1", Content: "content 1"})
+	store.Add(&card.Card{ID: "c2", Title: "Card 2", Content: "content 2"})
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+
+	m.width = 80
+	m.height = 30
+	m.updateViewportSize()
+	_ = m.renderActionBar()
+
+	// Find a button on Row 0 and a button on Row 1
+	var row0Btn *Button
+	var row1Btn *Button
+	for i := range m.buttons {
+		if m.buttons[i].Row == 0 && row0Btn == nil {
+			row0Btn = &m.buttons[i]
+		}
+		if m.buttons[i].Row == 1 && row1Btn == nil {
+			row1Btn = &m.buttons[i]
+		}
+	}
+
+	if row0Btn == nil {
+		t.Fatalf("expected at least one button on Row 0")
+	}
+	if row1Btn == nil {
+		t.Fatalf("expected at least one button on Row 1")
+	}
+
+	// Click row 0 button (Row 0 is terminal Y=1)
+	clickX0 := (row0Btn.X1 + row0Btn.X2) / 2
+	u, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: clickX0, Y: 1})
+	m = u.(*Model)
+
+	// Click row 1 button (Row 1 is terminal Y=2)
+	clickX1 := (row1Btn.X1 + row1Btn.X2) / 2
+	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: clickX1, Y: 2})
+	m = u.(*Model)
+
+	// In 2-row action bar mode, card list starts at Y=3.
+	// Clicking Y=4 (Card 2) should select Card 2 (idx 1).
+	leftColWidth := m.getLeftColWidth()
+	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: leftColWidth / 2, Y: 4})
+	m = u.(*Model)
+	if m.selectedIndex != 1 {
+		t.Fatalf("expected selectedIndex to be 1 after clicking second card row at Y=4, got %d", m.selectedIndex)
+	}
+}
+
+func TestModelHelpModalActionShortcuts(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Steps Card", Content: "```bash\necho hello\n```"})
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 30
+	m.updateViewportSize()
+
+	// Open Help modal
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	m = u.(*Model)
+	if !m.showHelp {
+		t.Fatalf("expected showHelp to be true")
+	}
+
+	// Press 'b' to trigger Step Picker directly from the help palette
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = u.(*Model)
+	if m.showHelp {
+		t.Fatalf("expected showHelp to be closed after pressing 'b'")
+	}
+	if !m.showBlockPicker {
+		t.Fatalf("expected showBlockPicker to be true after pressing 'b' in help modal")
+	}
+}
+
+
 

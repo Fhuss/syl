@@ -112,4 +112,35 @@ var (
 
 	BadgeVersionStyle = lipgloss.NewStyle().
 			Foreground(ColorMuted)
+
+	// Command Badge Palette Key Caps
+	BadgeKeyPrimary = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#16191E")).
+			Background(ColorPrimary).
+			Padding(0, 1)
+
+	BadgeKeySuccess = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#16191E")).
+			Background(ColorSuccess).
+			Padding(0, 1)
+
+	BadgeKeyWarning = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#16191E")).
+			Background(ColorWarning).
+			Padding(0, 1)
+
+	BadgeKeySecondary = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(ColorSecondary).
+			Padding(0, 1)
+
+	BadgeKeyMuted = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#ECEFF4")).
+			Background(lipgloss.Color("#4C566A")).
+			Padding(0, 1)
 )
