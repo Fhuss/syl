@@ -133,6 +133,18 @@ func findCmuxPeer() (string, bool) {
 	return ParseCmuxPanels(string(out), getCmuxCurrentSurface())
 }
 
+// cmuxPanelRunsSyl checks the displayed command, not arbitrary words in the
+// terminal title (e.g. a Pi chat titled "Fix Syl session detection").
+func cmuxPanelRunsSyl(rest string) bool {
+	title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), "[focused]"))
+	title = strings.TrimPrefix(title, "\"")
+	fields := strings.Fields(title)
+	if len(fields) == 0 {
+		return false
+	}
+	return filepath.Base(strings.TrimSuffix(fields[0], "\"")) == "syl"
+}
+
 // ParseCmuxPanels parses output from cmux list-panels, picking the best peer terminal.
 func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 	var fallbackPeer string
@@ -154,7 +166,6 @@ func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 		surfaceID := matches[2]
 		panelType := matches[3]
 		rest := matches[4]
-		restLower := strings.ToLower(rest)
 
 		// Only target terminal surfaces
 		if panelType != "terminal" {
@@ -166,7 +177,7 @@ func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 			continue
 		}
 		// Skip any panel running syl (e.g. "syl", "./bin/syl", "bin/syl", "/path/to/syl")
-		if strings.Contains(restLower, "syl") {
+		if cmuxPanelRunsSyl(rest) {
 			continue
 		}
 
@@ -296,7 +307,7 @@ func ParseCmuxAgent(output string, currentSurface string) string {
 		if currentSurface != "" && (surfaceID == currentSurface || strings.EqualFold(surfaceID, currentSurface)) {
 			continue
 		}
-		if strings.Contains(rest, "syl") {
+		if cmuxPanelRunsSyl(rest) {
 			continue
 		}
 

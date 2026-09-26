@@ -254,12 +254,8 @@ func findMatchingCard(cards []*card.Card, turn *watcher.Turn, newCommands string
 			}
 		}
 
-		// B. If no specific tool matched, target the most recent active card
-		for i := len(cards) - 1; i >= 0; i-- {
-			if cards[i].Status != card.StatusInvalidated {
-				return cards[i]
-			}
-		}
+		// Without a reference or shared tool, guessing the most recent card can
+		// overwrite an unrelated procedure. Prefer a new card to data loss.
 	}
 
 	// 2. Check for explicit command similarity (e.g. updating the same CLI invocation)

@@ -147,6 +147,34 @@ func TestPiAgentMessageFormat(t *testing.T) {
 	}
 }
 
+func TestPiToolUseTextWaitsForFinalAnswer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-tool-use.jsonl")
+	data := `{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Deploy the service"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"I'll inspect the config first"},{"type":"toolCall","name":"bash"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"toolResult","content":[{"type":"text","text":"Config found"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Deploy with kubectl apply -f service.yaml"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	turns := make(chan *Turn, 4)
+	go func() { _ = NewFileWatcher(path).Watch(ctx, turns, nil) }()
+	select {
+	case turn := <-turns:
+		if turn.User != "Deploy the service" || turn.Assistant != "Deploy with kubectl apply -f service.yaml" {
+			t.Fatalf("paired wrong Pi answer: %+v", turn)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no completed turn")
+	}
+	select {
+	case extra := <-turns:
+		t.Fatalf("intermediate assistant message emitted as extra turn: %+v", extra)
+	default:
+	}
+}
+
 // TestPiAgentToolUseInContentBlocks tests that tool_use blocks in Pi/Claude content
 // are properly extracted as ToolCalls.
 func TestPiAgentToolUseInContentBlocks(t *testing.T) {

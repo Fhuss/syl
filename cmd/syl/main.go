@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -222,15 +221,11 @@ Keys in TUI:
 		rec = reconciler.NewHeuristicReconciler()
 	}
 
-	var turnCh chan *watcher.Turn
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var activityCh chan watcher.AgentActivity
+	transcriptPath := ""
 	sessionLabel := "demo"
 	var detectedAgent string
 	if !isDemo {
-		transcriptPath := fileFlag
+		transcriptPath = fileFlag
 		if transcriptPath != "" {
 			detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
 		}
@@ -270,16 +265,6 @@ Keys in TUI:
 			}
 		}
 
-		if transcriptPath != "" {
-			turnCh = make(chan *watcher.Turn, 100)
-			activityCh = make(chan watcher.AgentActivity, 20)
-			fw := watcher.NewFileWatcher(transcriptPath)
-			go func() {
-				if err := fw.Watch(ctx, turnCh, activityCh); err != nil {
-					fmt.Fprintf(os.Stderr, "Watcher error: %v\n", err)
-				}
-			}()
-		}
 	}
 
 	// Choose subagent harness
@@ -306,7 +291,11 @@ Keys in TUI:
 		subagentHarness = harness.NewAutoHarness(harnessChoice, cfg.Subagent.Model)
 	}
 
-	model := ui.NewModel(store, rec, subagentHarness, turnCh, activityCh, isDemo, sessionLabel)
+	model := ui.NewModel(store, rec, subagentHarness, nil, nil, isDemo, sessionLabel)
+	if transcriptPath != "" {
+		model.StartWatching(transcriptPath)
+	}
+	defer model.StopWatching()
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if _, err := p.Run(); err != nil {

@@ -87,9 +87,11 @@ check_existing_cmux() {
   if command -v cmux &>/dev/null && cmux ping &>/dev/null; then
     local panels
     panels=$(cmux list-panels 2>/dev/null || true)
-    if echo "$panels" | grep -q "syl"; then
-      local surface
-      surface=$(echo "$panels" | grep "syl" | awk '{print $1}' | tr -d '*')
+    local surface
+    # Match the executable at the start of a panel's quoted command, not a
+    # chat title such as "Fix Syl session detection".
+    surface=$(printf '%s\n' "$panels" | awk -F '"' '$2 ~ /(^|\/)syl([[:space:]]|$)/ {gsub(/\*/, "", $1); split($1, fields, /[[:space:]]+/); for (i in fields) if (fields[i] ~ /^surface:/) {print fields[i]; exit}}')
+    if [[ -n "$surface" ]]; then
       echo "cmux surface ($surface)"
       return 0
     fi
