@@ -31,6 +31,93 @@ type TranscriptRecord struct {
 	} `json:"tool_calls"`
 }
 
+func (r *TranscriptRecord) UnmarshalJSON(data []byte) error {
+	type Alias TranscriptRecord
+	var raw struct {
+		Alias
+		RawContent json.RawMessage `json:"content"`
+		RawMessage json.RawMessage `json:"message"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = TranscriptRecord(raw.Alias)
+
+	// 1. Process RawContent if string or array of blocks
+	if len(raw.RawContent) > 0 {
+		var s string
+		if err := json.Unmarshal(raw.RawContent, &s); err == nil {
+			r.Content = s
+		} else {
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(raw.RawContent, &blocks); err == nil {
+				var sb strings.Builder
+				for _, b := range blocks {
+					if b.Text != "" {
+						if sb.Len() > 0 {
+							sb.WriteString("\n")
+						}
+						sb.WriteString(b.Text)
+					}
+				}
+				r.Content = sb.String()
+			}
+		}
+	}
+
+	// 2. Process RawMessage if string or nested message object (Claude Code / Pi)
+	if len(raw.RawMessage) > 0 {
+		var s string
+		if err := json.Unmarshal(raw.RawMessage, &s); err == nil {
+			r.Message = s
+		} else {
+			var nested struct {
+				Role       string          `json:"role"`
+				RawContent json.RawMessage `json:"content"`
+			}
+			if err := json.Unmarshal(raw.RawMessage, &nested); err == nil {
+				if nested.Role != "" && r.Role == "" {
+					r.Role = nested.Role
+				}
+				if r.Content == "" && len(nested.RawContent) > 0 {
+					var text string
+					if err := json.Unmarshal(nested.RawContent, &text); err == nil {
+						r.Content = text
+					} else {
+						var blocks []struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+							Name string `json:"name"`
+						}
+						if err := json.Unmarshal(nested.RawContent, &blocks); err == nil {
+							var sb strings.Builder
+							for _, b := range blocks {
+								if b.Text != "" {
+									if sb.Len() > 0 {
+										sb.WriteString("\n")
+									}
+									sb.WriteString(b.Text)
+								}
+								if (b.Type == "tool_use" || b.Type == "tool_call") && b.Name != "" {
+									r.ToolCalls = append(r.ToolCalls, struct {
+										Name string `json:"name"`
+									}{Name: b.Name})
+								}
+							}
+							r.Content = sb.String()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func (r *TranscriptRecord) IsUser() bool {
 	t := strings.ToUpper(r.Type)
 	role := strings.ToUpper(r.Role)

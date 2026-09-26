@@ -59,8 +59,11 @@ func ListSessions(limit int) ([]SessionInfo, error) {
 			agent: "claude",
 			patterns: []string{
 				filepath.Join(home, ".claude", "projects", "*", "*.jsonl"),
+				filepath.Join(home, ".claude", "projects", "*", "*", "*.jsonl"),
 				filepath.Join(home, ".claude", "sessions", "*.jsonl"),
+				filepath.Join(home, ".claude", "sessions", "*", "*.jsonl"),
 				filepath.Join(home, ".config", "claude", "projects", "*", "*.jsonl"),
+				filepath.Join(home, ".config", "claude", "sessions", "*.jsonl"),
 			},
 			idExtractor: func(path string) (string, string) {
 				base := filepath.Base(path)
@@ -76,12 +79,23 @@ func ListSessions(limit int) ([]SessionInfo, error) {
 			agent: "pi",
 			patterns: []string{
 				filepath.Join(home, ".pi", "sessions", "*.jsonl"),
+				filepath.Join(home, ".pi", "sessions", "*", "*.jsonl"),
 				filepath.Join(home, ".pi", "agent", "sessions", "*.jsonl"),
+				filepath.Join(home, ".pi", "agent", "sessions", "*", "*.jsonl"),
 				filepath.Join(home, ".config", "pi", "sessions", "*.jsonl"),
+				filepath.Join(home, ".config", "pi", "sessions", "*", "*.jsonl"),
 			},
 			idExtractor: func(path string) (string, string) {
 				base := filepath.Base(path)
 				id := strings.TrimSuffix(base, filepath.Ext(base))
+				if idx := strings.Index(id, "_"); idx != -1 && idx+1 < len(id) {
+					uuidPart := id[idx+1:]
+					short := uuidPart
+					if len(short) > 8 {
+						short = short[:8]
+					}
+					return uuidPart, short
+				}
 				shortID := id
 				if len(shortID) > 8 {
 					shortID = shortID[:8]
