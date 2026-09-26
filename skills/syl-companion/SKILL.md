@@ -16,25 +16,14 @@ This skill guides the AI assistant in collaborating symbiotically with **Syl**, 
 When the user asks to start, initialize, or launch Syl (e.g. *"init syl"*, *"launch syl"*, *"open syl pane"*, or on session startup):
 
 ### One-Command Automated Setup:
-Execute the companion init script via `run_command`:
+Execute `syl launch` via `run_command` (or terminal):
 
 ```bash
-# Check if Syl is already running or launch it to the right:
-./skills/syl-companion/scripts/init-syl.sh
-```
+# Check if Syl is already running or launch it in a right split:
+syl launch
 
-### What this script does automatically:
-1. **Detects active multiplexer**:
-   * **`cmux` (Ghostty)**: Runs `cmux new-split right --focus false` and starts `syl` in the new right-hand surface.
-   * **`tmux`**: Runs `tmux split-window -h -p 35 "syl"`.
-   * **`iTerm2`**: Splits current session vertically to the right via AppleScript.
-   * **macOS Terminal.app**: Opens a companion Terminal window placed on the right half of the display.
-2. **Prevents duplicate panes**: Checks if Syl is already running in an active panel/pane and warns rather than cluttering your workspace with duplicate splits (override with `--force`).
-3. **Auto-build fallback**: If `syl` is not in `$PATH`, automatically builds it from local source into `~/.local/bin/syl`.
-
-### Checking Status:
-```bash
-./skills/syl-companion/scripts/init-syl.sh --check
+# Or check if Syl is already active:
+syl launch --check
 ```
 
 ---

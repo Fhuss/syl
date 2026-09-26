@@ -15,6 +15,7 @@ import (
 	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/multiplexer"
 	"github.com/Fhuss/syl/pkg/reconciler"
+	"github.com/Fhuss/syl/pkg/skill"
 	"github.com/Fhuss/syl/pkg/ui"
 	"github.com/Fhuss/syl/pkg/watcher"
 )
@@ -35,6 +36,8 @@ Usage:
 Commands:
   demo               Run an interactive simulation demonstrating live card mutation
   sessions           List active and recent conversation sessions to choose from
+  install-skill      Install companion skill into Pi Agent, Claude Code, or Antigravity
+  launch / start     Launch Syl in an adjacent right-hand split (cmux/tmux/terminal)
   init-config        Generate a default configuration file in ~/.config/syl/config.yaml
   version            Print version information
 
@@ -139,6 +142,54 @@ Keys in TUI:
 			os.Exit(1)
 		}
 		fmt.Printf("Default configuration written to %s\n", target)
+		os.Exit(0)
+	}
+
+	if subcommand == "install-skill" {
+		all := false
+		specific := ""
+		for _, a := range args[1:] {
+			if a == "--all" || a == "-a" {
+				all = true
+			} else if a == "--pi" {
+				specific = "Pi Agent (global)"
+			} else if a == "--claude" {
+				specific = "Claude Code"
+			} else if a == "--gemini" || a == "--antigravity" {
+				specific = "Antigravity Plugin"
+			}
+		}
+		installed, err := skill.InstallSkill(all, specific)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error installing skill: %v\n", err)
+			os.Exit(1)
+		}
+		if len(installed) == 0 {
+			fmt.Println("No active agent skill directories found. Run 'syl install-skill --all' to force install into all standard locations.")
+			os.Exit(0)
+		}
+		fmt.Printf("✓ Successfully installed Syl Companion Skill into:\n")
+		for _, p := range installed {
+			fmt.Printf("  • %s\n", p)
+		}
+		fmt.Printf("\nYour agent (Pi / Claude / Antigravity) will now recognize 'start syl' and [Ref: ...] references!\n")
+		os.Exit(0)
+	}
+
+	if subcommand == "launch" || subcommand == "start" {
+		force := false
+		check := false
+		for _, a := range args[1:] {
+			if a == "--force" || a == "-f" {
+				force = true
+			} else if a == "--check" || a == "-c" {
+				check = true
+			}
+		}
+		if err := skill.Launch(force, check); err != nil {
+			fmt.Fprintf(os.Stderr, "Launch error: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
