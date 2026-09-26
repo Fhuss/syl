@@ -36,6 +36,19 @@ const (
 	ModeHistory
 )
 
+type PaneType int
+
+const (
+	PaneCards PaneType = iota
+	PanePreview
+)
+
+type EditorFinishedMsg struct {
+	Err      error
+	TempFile string
+	CardID   string
+}
+
 type TurnReceivedMsg struct {
 	Turn *watcher.Turn
 }
@@ -108,6 +121,15 @@ type Model struct {
 	showSessionSwitcher bool
 	sessionList         []watcher.SessionInfo
 	selectedSessionIdx  int
+
+	// Vim Enhancements
+	activePane     PaneType
+	lastGKeyTime   time.Time
+	lastZKeyTime   time.Time
+	isFolded       bool
+	searchMatches  []int
+	searchMatchIdx int
+	currentContent string
 }
 
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
@@ -296,6 +318,11 @@ func (m *Model) updateViewportSize() {
 }
 
 func (m *Model) updateViewportContent() {
+	m.updateViewportContentPreserve(false)
+}
+
+func (m *Model) updateViewportContentPreserve(preserveOffset bool) {
+	prevOffset := m.viewport.YOffset
 	cards := m.store.List()
 	if len(cards) == 0 || m.selectedIndex >= len(cards) {
 		m.viewport.SetContent("No card selected.")
@@ -303,6 +330,7 @@ func (m *Model) updateViewportContent() {
 	}
 
 	selected := cards[m.selectedIndex]
+	var finalContent string
 	if m.viewMode == ModeHistory {
 		var b strings.Builder
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Revision History: " + selected.Title + "\n\n"))
@@ -311,18 +339,80 @@ func (m *Model) updateViewportContent() {
 				h.Version, h.UpdatedAt.Format("15:04:05"), h.Reason)
 			b.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Render(entry))
 		}
-		m.viewport.SetContent(b.String())
+		finalContent = b.String()
 	} else if m.showRaw {
-		// Display raw unformatted markdown text - no ANSI colors, no margins, ideal for mouse selection
-		m.viewport.SetContent(selected.Content)
-	} else {
-		rendered, err := m.renderer.Render(selected.Content)
-		if err != nil {
-			rendered = selected.Content
+		rawContent := selected.Content
+		if m.isFolded {
+			rawContent = card.FoldCodeBlocks(rawContent)
 		}
-		m.viewport.SetContent(rendered)
+		finalContent = rawContent
+	} else {
+		contentToRender := selected.Content
+		if m.isFolded {
+			contentToRender = card.FoldCodeBlocks(contentToRender)
+		}
+		rendered, err := m.renderer.Render(contentToRender)
+		if err != nil {
+			rendered = contentToRender
+		}
+		finalContent = rendered
 	}
-	m.viewport.GotoTop()
+
+	m.currentContent = finalContent
+	m.viewport.SetContent(finalContent)
+
+	if preserveOffset {
+		m.viewport.SetYOffset(prevOffset)
+	} else {
+		m.viewport.GotoTop()
+	}
+	m.computeSearchMatches()
+}
+
+func (m *Model) computeSearchMatches() {
+	m.searchMatches = nil
+	m.searchMatchIdx = 0
+	if m.searchQuery == "" {
+		return
+	}
+	if m.currentContent == "" {
+		m.updateViewportContentPreserve(true)
+	}
+	lines := strings.Split(m.currentContent, "\n")
+	queryLower := strings.ToLower(m.searchQuery)
+	for i, l := range lines {
+		stripped := strings.ToLower(ansi.Strip(l))
+		if strings.Contains(stripped, queryLower) {
+			m.searchMatches = append(m.searchMatches, i)
+		}
+	}
+}
+
+func (m *Model) jumpSearchMatch(next bool) {
+	if m.searchQuery == "" {
+		m.toast = "No search pattern (use '/' to search)"
+		return
+	}
+	if len(m.searchMatches) == 0 {
+		m.computeSearchMatches()
+		if len(m.searchMatches) == 0 {
+			m.toast = fmt.Sprintf("Pattern not found in card: %s", m.searchQuery)
+			return
+		}
+	}
+
+	if next {
+		m.searchMatchIdx = (m.searchMatchIdx + 1) % len(m.searchMatches)
+	} else {
+		m.searchMatchIdx = (m.searchMatchIdx - 1 + len(m.searchMatches)) % len(m.searchMatches)
+		if m.searchMatchIdx < 0 {
+			m.searchMatchIdx += len(m.searchMatches)
+		}
+	}
+
+	targetLine := m.searchMatches[m.searchMatchIdx]
+	m.viewport.SetYOffset(targetLine)
+	m.toast = fmt.Sprintf("[%d/%d] Match: %s", m.searchMatchIdx+1, len(m.searchMatches), m.searchQuery)
 }
 
 func (m *Model) actionToggleFocus() {
@@ -345,6 +435,91 @@ func (m *Model) actionToggleRaw() {
 		m.toast = "Rendered markdown mode"
 	}
 	m.updateViewportContent()
+}
+
+func (m *Model) actionTogglePaneFocus() {
+	if m.viewMode == ModeDetail {
+		return
+	}
+	if m.activePane == PaneCards {
+		m.activePane = PanePreview
+		m.toast = "Focus: Preview buffer (j/k scroll, 'w' switch back)"
+	} else {
+		m.activePane = PaneCards
+		m.toast = "Focus: Card turns list (j/k select, 'w' switch back)"
+	}
+}
+
+func (m *Model) actionToggleFold() {
+	m.isFolded = !m.isFolded
+	if m.isFolded {
+		m.toast = "Folded code blocks ('za' to expand)"
+	} else {
+		m.toast = "Expanded code blocks ('za' to fold)"
+	}
+	m.updateViewportContentPreserve(true)
+}
+
+func (m *Model) actionToggleChecklist() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		return nil
+	}
+	c := cards[m.selectedIndex]
+	newContent, toggled, toastMsg := card.ToggleTaskCheckbox(c.Content)
+	if !toggled {
+		m.toast = "No checklist items (- [ ]) in card"
+	} else {
+		m.store.Update(c.ID, newContent, "Task toggled")
+		m.saveSessionState()
+		m.updateViewportContentPreserve(true)
+		m.toast = "✓ " + toastMsg
+	}
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return ClearToastMsg{}
+	})
+}
+
+func (m *Model) actionOpenInEditor() tea.Cmd {
+	cards := m.store.List()
+	if len(cards) == 0 || m.selectedIndex >= len(cards) {
+		m.toast = "No card selected"
+		return nil
+	}
+	c := cards[m.selectedIndex]
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		for _, e := range []string{"nvim", "vim", "nano", "vi"} {
+			if p, err := exec.LookPath(e); err == nil {
+				editor = p
+				break
+			}
+		}
+	}
+	if editor == "" {
+		m.toast = "No editor found ($EDITOR not set, nvim/vim/nano not found)"
+		return nil
+	}
+
+	tempDir := os.TempDir()
+	tempFile := filepath.Join(tempDir, fmt.Sprintf("syl-%s.md", c.ID))
+	if err := os.WriteFile(tempFile, []byte(c.Content), 0o600); err != nil {
+		m.toast = fmt.Sprintf("Error creating temp file: %v", err)
+		return nil
+	}
+
+	cmd := exec.Command(editor, tempFile)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return EditorFinishedMsg{
+			Err:      err,
+			TempFile: tempFile,
+			CardID:   c.ID,
+		}
+	})
 }
 
 func (m *Model) actionCopy() tea.Cmd {
@@ -1015,9 +1190,11 @@ func (m *Model) buildHelpModal() string {
 	}
 
 	// 1. Actions & Workflow
-	b.WriteString(secHeader("🚀", "Workflow & Multiplexer") + "\n")
+	b.WriteString(secHeader("🚀", "Workflow & Actions") + "\n")
 	b.WriteString(renderBadgeRow("s", BadgeKeyPrimary, "Send to Surface", "Send [Ref: ...] reference to active cmux/tmux pane") + "\n")
-	b.WriteString(renderBadgeRow("b", BadgeKeyPrimary, "Step Picker", "Surgical block picker (yank 1-9, run in shell)") + "\n")
+	b.WriteString(renderBadgeRow("b", BadgeKeyPrimary, "Step/File Picker", "Surgical block picker (yank 1-9, run, open URL/file)") + "\n")
+	b.WriteString(renderBadgeRow("v", BadgeKeyPrimary, "Edit in $EDITOR", "Open active card in nvim/vim and save edits back") + "\n")
+	b.WriteString(renderBadgeRow("␣", BadgeKeyPrimary, "Check Task", "Toggle next task checkbox (- [ ] -> - [x])") + "\n")
 	b.WriteString(renderBadgeRow("c", BadgeKeySuccess, "Copy Code", "Copy extracted code block(s) to clipboard") + "\n")
 	b.WriteString(renderBadgeRow("C / y", BadgeKeySuccess, "Copy All", "Copy full card markdown content to clipboard") + "\n")
 	b.WriteString(renderBadgeRow("u", BadgeKeySuccess, "Open URL", "Open primary card documentation link in browser") + "\n")
@@ -1028,9 +1205,10 @@ func (m *Model) buildHelpModal() string {
 	// 2. View & Display Modes
 	b.WriteString(secHeader("👁", "View & Display Modes") + "\n")
 	b.WriteString(renderBadgeRow("Tab", BadgeKeySecondary, "Focus / Split", "Toggle Focus View (hide/show turns column)") + "\n")
+	b.WriteString(renderBadgeRow("w", BadgeKeySecondary, "Switch Pane", "Switch focus between card list and preview buffer") + "\n")
+	b.WriteString(renderBadgeRow("za", BadgeKeySecondary, "Fold Code", "Collapse or expand fenced code blocks in card") + "\n")
 	b.WriteString(renderBadgeRow("r", BadgeKeySecondary, "Raw / Rendered", "Toggle Raw text mode (for clean mouse select)") + "\n")
 	b.WriteString(renderBadgeRow("h", BadgeKeySecondary, "Version Diff", "Toggle card version revision history") + "\n")
-	b.WriteString(renderBadgeRow("g / G", BadgeKeySecondary, "Top / Bottom", "Jump directly to top or bottom of card preview") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -1038,7 +1216,8 @@ func (m *Model) buildHelpModal() string {
 	// 3. Session & Card Management
 	b.WriteString(secHeader("🗂", "Session & Organization") + "\n")
 	b.WriteString(renderBadgeRow("/", BadgeKeyWarning, "Find Cards", "Search & filter reference cards interactively") + "\n")
-	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Switch active conversation session (agy, claude, codex)") + "\n")
+	b.WriteString(renderBadgeRow("n / N", BadgeKeyWarning, "Next / Prev Match", "Jump to next or previous in-card search match") + "\n")
+	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Switch active conversation session (agy, claude, pi)") + "\n")
 	b.WriteString(renderBadgeRow("p", BadgeKeyWarning, "Pin Card", "Pin / unpin card (protect from pruning)") + "\n")
 	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
 	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop / delete card from reference pane") + "\n")
@@ -1046,12 +1225,14 @@ func (m *Model) buildHelpModal() string {
 		b.WriteString("\n")
 	}
 
-	// 4. Navigation & Control
-	b.WriteString(secHeader("🧭", "Navigation & Control") + "\n")
-	b.WriteString(renderBadgeRow("j / k", BadgeKeyMuted, "Next / Prev Card", "Switch active reference turn/card (or ← / →)") + "\n")
-	b.WriteString(renderBadgeRow("↑ / ↓", BadgeKeyMuted, "Scroll Content", "Scroll card preview content smoothly") + "\n")
+	// 4. Navigation & Control (Vim Motions)
+	b.WriteString(secHeader("🧭", "Vim Navigation & Control") + "\n")
+	b.WriteString(renderBadgeRow("j / k", BadgeKeyMuted, "Down / Up", "Scroll buffer (preview focused) or navigate cards") + "\n")
+	b.WriteString(renderBadgeRow("Ctrl-e/y", BadgeKeyMuted, "Nudge Scroll", "Scroll preview buffer down or up 1 line") + "\n")
+	b.WriteString(renderBadgeRow("Ctrl-d/u", BadgeKeyMuted, "Half Page", "Scroll preview buffer half page down or up") + "\n")
+	b.WriteString(renderBadgeRow("gg / G", BadgeKeyMuted, "Top / Bottom", "Jump directly to top (gg) or bottom (G) of card") + "\n")
 	b.WriteString(renderBadgeRow("? / F1", BadgeKeyMuted, "Help Palette", "Toggle this command reference glossary") + "\n")
-	b.WriteString(renderBadgeRow("q / Esc", BadgeKeyMuted, "Close / Quit", "Close help modal / Quit syl") + "\n")
+	b.WriteString(renderBadgeRow("q / Esc", BadgeKeyMuted, "Close / Quit", "Close modal / Quit syl") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -1247,6 +1428,14 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		return m.actionSend()
 	case "block_picker":
 		m.actionToggleBlockPicker()
+	case "edit_card":
+		return m.actionOpenInEditor()
+	case "toggle_pane":
+		m.actionTogglePaneFocus()
+	case "toggle_fold":
+		m.actionToggleFold()
+	case "checklist":
+		return m.actionToggleChecklist()
 	case "search":
 		m.searchMode = true
 		m.searchQuery = ""
@@ -1283,6 +1472,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportSize()
 		m.updateViewportContent()
 		return m, nil
+
+	case EditorFinishedMsg:
+		if msg.Err != nil {
+			m.toast = fmt.Sprintf("Editor exited: %v", msg.Err)
+		} else if data, err := os.ReadFile(msg.TempFile); err == nil {
+			newContent := string(data)
+			cards := m.store.List()
+			if len(cards) > 0 && m.selectedIndex < len(cards) {
+				c := cards[m.selectedIndex]
+				if strings.TrimSpace(newContent) != strings.TrimSpace(c.Content) && strings.TrimSpace(newContent) != "" {
+					m.store.Update(c.ID, newContent, "Edited in editor")
+					m.saveSessionState()
+					m.updateViewportContentPreserve(true)
+					m.toast = "✓ Card updated from editor"
+				} else {
+					m.toast = "No changes made in editor"
+				}
+			}
+		}
+		_ = os.Remove(msg.TempFile)
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		})
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -1444,6 +1656,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.viewMode != ModeDetail {
 					leftColWidth := m.getLeftColWidth()
 					if msg.Y >= cardListStartY && msg.X <= leftColWidth {
+						m.activePane = PaneCards
 						cardIdx := m.cardListOffset + (msg.Y - cardListStartY)
 						cards := m.store.List()
 						if cardIdx >= 0 && cardIdx < len(cards) {
@@ -1454,6 +1667,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.updateViewportContent()
 							}
 						}
+					} else if msg.Y >= cardListStartY && msg.X > leftColWidth {
+						m.activePane = PanePreview
 					}
 				}
 			} else if msg.Button == tea.MouseButtonWheelUp {
@@ -1547,6 +1762,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "u":
 				m.showHelp = false
 				return m, m.actionOpenURL()
+			case "v":
+				m.showHelp = false
+				return m, m.actionOpenInEditor()
+			case "w":
+				m.showHelp = false
+				m.actionTogglePaneFocus()
+				return m, nil
+			case "z", "Z":
+				m.showHelp = false
+				m.actionToggleFold()
+				return m, nil
 			case "j", "down", "right":
 				m.showHelp = false
 				cards := m.store.List()
@@ -1706,6 +1932,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		// Vim Mode & Pane Controls
+		case "w", "ctrl+w":
+			m.actionTogglePaneFocus()
+			return m, nil
+
+		case "v", "E":
+			return m, m.actionOpenInEditor()
+
+		case "z":
+			m.lastZKeyTime = time.Now()
+			return m, nil
+
+		case "a":
+			if time.Since(m.lastZKeyTime) < 600*time.Millisecond {
+				m.lastZKeyTime = time.Time{}
+				m.actionToggleFold()
+				return m, nil
+			}
+			return m, nil
+
+		case "Z":
+			m.actionToggleFold()
+			return m, nil
+
+		case " ":
+			if m.isDemo {
+				if m.demoStep < 3 {
+					return m, m.advanceDemo()
+				}
+				m.toast = "Demo finished! All 3 scenario turns demonstrated."
+				return m, nil
+			}
+			return m, m.actionToggleChecklist()
+
+		case "n":
+			m.jumpSearchMatch(true)
+			return m, nil
+
+		case "N":
+			m.jumpSearchMatch(false)
+			return m, nil
+
 		// Scrolling preview viewport content
 		case "up":
 			m.viewport.LineUp(2)
@@ -1713,6 +1981,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "down":
 			m.viewport.LineDown(2)
+			return m, nil
+
+		case "ctrl+e":
+			m.viewport.LineDown(1)
+			return m, nil
+
+		case "ctrl+y":
+			m.viewport.LineUp(1)
 			return m, nil
 
 		case "pgup", "ctrl+u":
@@ -1723,7 +1999,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.HalfViewDown()
 			return m, nil
 
-		case "home", "g":
+		case "ctrl+f":
+			m.viewport.ViewDown()
+			return m, nil
+
+		case "ctrl+b":
+			m.viewport.ViewUp()
+			return m, nil
+
+		case "{":
+			m.viewport.LineUp(5)
+			return m, nil
+
+		case "}":
+			m.viewport.LineDown(5)
+			return m, nil
+
+		case "g":
+			if time.Since(m.lastGKeyTime) < 500*time.Millisecond {
+				m.viewport.GotoTop()
+				m.lastGKeyTime = time.Time{}
+			} else {
+				m.lastGKeyTime = time.Now()
+			}
+			return m, nil
+
+		case "home":
 			m.viewport.GotoTop()
 			return m, nil
 
@@ -1733,17 +2034,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Navigating reference turns / cards
 		case "k", "left", "[":
-			if m.selectedIndex > 0 {
+			if m.viewMode == ModeDetail || m.activePane == PanePreview {
+				m.viewport.LineUp(1)
+			} else if m.selectedIndex > 0 {
 				m.selectedIndex--
 				m.updateViewportContent()
 			}
+			return m, nil
 
 		case "j", "right", "]":
-			cards := m.store.List()
-			if m.selectedIndex < len(cards)-1 {
-				m.selectedIndex++
-				m.updateViewportContent()
+			if m.viewMode == ModeDetail || m.activePane == PanePreview {
+				m.viewport.LineDown(1)
+			} else {
+				cards := m.store.List()
+				if m.selectedIndex < len(cards)-1 {
+					m.selectedIndex++
+					m.updateViewportContent()
+				}
 			}
+			return m, nil
 
 		case "tab", "enter", "f", "t":
 			m.actionToggleFocus()
@@ -1777,14 +2086,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toast = "Demo finished! All 3 scenario turns demonstrated."
 			} else {
 				return m, m.actionDrop()
-			}
-
-		case " ":
-			if m.isDemo {
-				if m.demoStep < 3 {
-					return m, m.advanceDemo()
-				}
-				m.toast = "Demo finished! All 3 scenario turns demonstrated."
 			}
 		}
 	}
@@ -1821,6 +2122,23 @@ func (m *Model) getActionBarBadges() []actionBadge {
 			labelFull:    "👁 Hide Turns (Tab)",
 			action:       "toggle_focus",
 			style:        BtnStyle,
+		})
+	}
+
+	// 1b. Pane Switch (w) in split view
+	if m.viewMode == ModeSplit {
+		paneLabelCompact := "w Pane"
+		paneLabelFull := "⇋ Preview (w)"
+		paneStyle := BtnStyle
+		if m.activePane == PanePreview {
+			paneLabelFull = "⇋ Cards (w)"
+			paneStyle = BtnHoverStyle
+		}
+		badges = append(badges, actionBadge{
+			labelCompact: paneLabelCompact,
+			labelFull:    paneLabelFull,
+			action:       "toggle_pane",
+			style:        paneStyle,
 		})
 	}
 
@@ -1889,6 +2207,43 @@ func (m *Model) getActionBarBadges() []actionBadge {
 			action:       "toggle_raw",
 			style:        BtnStyle,
 		})
+	}
+
+	// 8b. Fold (za)
+	foldLabelCompact := "za Fold"
+	foldLabelFull := "▾ Fold (za)"
+	foldStyle := BtnStyle
+	if m.isFolded {
+		foldLabelCompact = "za Expand"
+		foldLabelFull = "▸ Expand (za)"
+		foldStyle = BtnHoverStyle
+	}
+	badges = append(badges, actionBadge{
+		labelCompact: foldLabelCompact,
+		labelFull:    foldLabelFull,
+		action:       "toggle_fold",
+		style:        foldStyle,
+	})
+
+	// 8c. Edit in $EDITOR (v)
+	badges = append(badges, actionBadge{
+		labelCompact: "v Edit",
+		labelFull:    "✏ Edit (v)",
+		action:       "edit_card",
+		style:        BtnStyle,
+	})
+
+	// 8d. Checklist toggle (Space)
+	cards := m.store.List()
+	if !m.isDemo && len(cards) > 0 && m.selectedIndex < len(cards) {
+		if strings.Contains(cards[m.selectedIndex].Content, "- [ ]") || strings.Contains(cards[m.selectedIndex].Content, "- [x]") {
+			badges = append(badges, actionBadge{
+				labelCompact: "␣ Task",
+				labelFull:    "✓ Task (␣)",
+				action:       "checklist",
+				style:        BtnStyle,
+			})
+		}
 	}
 
 	// 9. History (h)
@@ -2065,7 +2420,18 @@ func (m *Model) renderBaseView() string {
 		sessionBadge = lipgloss.NewStyle().Foreground(ColorMuted).Render("["+m.sessionLabel+"]") + " "
 	}
 
-	headerLeft := HeaderStyle.Render("syl") + " " + sessionBadge + statusBadge
+	focusBadge := ""
+	if m.viewMode == ModeSplit {
+		if m.activePane == PanePreview {
+			focusBadge = " " + lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("[PREVIEW]")
+		} else {
+			focusBadge = " " + lipgloss.NewStyle().Foreground(ColorMuted).Render("[CARDS]")
+		}
+	} else if m.viewMode == ModeDetail {
+		focusBadge = " " + lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("[FOCUS]")
+	}
+
+	headerLeft := HeaderStyle.Render("syl") + " " + sessionBadge + statusBadge + focusBadge
 	var headerRight string
 	if m.toast != "" {
 		headerRight = ToastStyle.Render(m.toast)

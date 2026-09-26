@@ -34,6 +34,8 @@ var (
 	numberedStepRe = regexp.MustCompile(`(?m)^\s*(?:(\d+)[\.)]|Step\s+(\d+)[:.]?)\s+(.+)`)
 	taskListRe     = regexp.MustCompile(`(?m)^\s*-\s*\[([ xX])\]\s+(.+)`)
 	inlineCmdRe    = regexp.MustCompile("`([^`]+)`")
+	uncheckedTaskRe = regexp.MustCompile(`(?m)^(\s*-\s*\[) (\]\s+.*)$`)
+	checkedTaskRe   = regexp.MustCompile(`(?m)^(\s*-\s*\[)[xX](\]\s+.*)$`)
 
 	// File path patterns:
 	// - file:// URIs (Antigravity/IDE style): file:///Users/fabian/file.go#L10-L20
@@ -336,3 +338,61 @@ func extractFilePaths(content string, seen map[string]bool) []ActionBlock {
 
 	return blocks
 }
+
+// ToggleTaskCheckbox finds the first unchecked task (- [ ]) and checks it (- [x]).
+// If all tasks are already checked, it resets all tasks to unchecked (- [ ]).
+func ToggleTaskCheckbox(content string) (string, bool, string) {
+	loc := uncheckedTaskRe.FindStringSubmatchIndex(content)
+	if len(loc) >= 6 {
+		prefix := content[:loc[2]] + content[loc[2]:loc[3]]
+		suffix := content[loc[4]:loc[5]] + content[loc[5]:]
+		newContent := prefix + "x" + suffix
+		rawLine := strings.TrimSpace(content[loc[0]:loc[1]])
+		taskText := rawLine
+		if strings.HasPrefix(taskText, "- [ ]") {
+			taskText = strings.TrimSpace(strings.TrimPrefix(taskText, "- [ ]"))
+		}
+		if len(taskText) > 40 {
+			taskText = taskText[:37] + "..."
+		}
+		return newContent, true, fmt.Sprintf("Completed: %s", taskText)
+	}
+
+	if checkedTaskRe.MatchString(content) {
+		newContent := checkedTaskRe.ReplaceAllString(content, "${1} ${2}")
+		return newContent, true, "Reset all tasks to unchecked"
+	}
+
+	return content, false, ""
+}
+
+// FoldCodeBlocks replaces fenced code blocks with concise collapsed indicators.
+func FoldCodeBlocks(content string) string {
+	return codeBlockRegex.ReplaceAllStringFunc(content, func(match string) string {
+		sub := codeBlockRegex.FindStringSubmatch(match)
+		if len(sub) < 3 {
+			return match
+		}
+		lang := strings.ToUpper(strings.TrimSpace(sub[1]))
+		if lang == "" {
+			lang = "CODE"
+		}
+		lines := strings.Split(strings.TrimSpace(sub[2]), "\n")
+		firstLine := ""
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			if l != "" && !strings.HasPrefix(l, "#") && !strings.HasPrefix(l, "//") {
+				firstLine = l
+				break
+			}
+		}
+		if firstLine == "" && len(lines) > 0 {
+			firstLine = strings.TrimSpace(lines[0])
+		}
+		if len(firstLine) > 50 {
+			firstLine = firstLine[:47] + "..."
+		}
+		return fmt.Sprintf("> ▾ **[%s]** `%s` *(%d lines folded, 'za' to expand)*\n\n", lang, firstLine, len(lines))
+	})
+}
+

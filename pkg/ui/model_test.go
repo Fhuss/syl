@@ -857,13 +857,20 @@ func TestModelActionBarMultiRowMouseClick(t *testing.T) {
 	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: clickX1, Y: 2})
 	m = u.(*Model)
 
-	// In 2-row action bar mode, card list starts at Y=3.
-	// Clicking Y=4 (Card 2) should select Card 2 (idx 1).
+	// If clicking the action bar button toggled focus mode, restore split mode for card list testing
+	if m.viewMode == ModeDetail {
+		m.actionToggleFocus()
+	}
+
+	// Card list starts directly below the action bar rows:
+	// Clicking card 2 (idx 1) is at cardListStartY + 1.
+	cardListStartY := 1 + m.getActionBarLines()
+	card2Y := cardListStartY + 1
 	leftColWidth := m.getLeftColWidth()
-	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: leftColWidth / 2, Y: 4})
+	u, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: leftColWidth / 2, Y: card2Y})
 	m = u.(*Model)
 	if m.selectedIndex != 1 {
-		t.Fatalf("expected selectedIndex to be 1 after clicking second card row at Y=4, got %d", m.selectedIndex)
+		t.Fatalf("expected selectedIndex to be 1 after clicking second card row at Y=%d, got %d", card2Y, m.selectedIndex)
 	}
 }
 
@@ -954,5 +961,266 @@ func TestModelBlockPickerOpenFile(t *testing.T) {
 	}
 }
 
+func TestModelVimPaneFocusToggleAndJK(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Card 1", Content: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10"})
+	card2Content := ""
+	for i := 1; i <= 30; i++ {
+		card2Content += fmt.Sprintf("card 2 line %d\n", i)
+	}
+	store.Add(&card.Card{ID: "c2", Title: "Card 2", Content: card2Content})
 
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 15
+	m.updateViewportSize()
 
+	// Initial state: activePane is PaneCards
+	if m.activePane != PaneCards {
+		t.Fatalf("expected default activePane to be PaneCards")
+	}
+
+	// In PaneCards: 'j' selects next card
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = u.(*Model)
+	if m.selectedIndex != 1 {
+		t.Fatalf("expected selectedIndex 1 after 'j', got %d", m.selectedIndex)
+	}
+
+	// Press 'w' to toggle to PanePreview
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = u.(*Model)
+	if m.activePane != PanePreview {
+		t.Fatalf("expected activePane to be PanePreview after 'w'")
+	}
+
+	// In PanePreview: 'j' scrolls down viewport instead of changing card
+	initialOffset := m.viewport.YOffset
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = u.(*Model)
+	if m.selectedIndex != 1 {
+		t.Fatalf("expected selectedIndex to remain 1 in PanePreview, got %d", m.selectedIndex)
+	}
+	if m.viewport.YOffset <= initialOffset {
+		t.Fatalf("expected viewport offset to increase after 'j' in PanePreview")
+	}
+
+	// Test 'k' scrolls up in PanePreview
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = u.(*Model)
+	if m.viewport.YOffset != initialOffset {
+		t.Fatalf("expected viewport offset to return to initial after 'k'")
+	}
+
+	// Switch back to PaneCards with 'w'
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = u.(*Model)
+	if m.activePane != PaneCards {
+		t.Fatalf("expected activePane to be PaneCards after second 'w'")
+	}
+}
+
+func TestModelVimMotions(t *testing.T) {
+	longContent := ""
+	for i := 1; i <= 60; i++ {
+		longContent += fmt.Sprintf("line %d of content\n", i)
+	}
+
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c-long", Title: "Long Card", Content: longContent})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 15
+	m.updateViewportSize()
+
+	// 1. Ctrl-E nudges 1 line down
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	m = u.(*Model)
+	if m.viewport.YOffset != 1 {
+		t.Fatalf("expected offset 1 after ctrl+e, got %d", m.viewport.YOffset)
+	}
+
+	// 2. Ctrl-Y nudges 1 line up
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	m = u.(*Model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected offset 0 after ctrl+y, got %d", m.viewport.YOffset)
+	}
+
+	// 3. '}' jumps 5 lines down
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
+	m = u.(*Model)
+	if m.viewport.YOffset != 5 {
+		t.Fatalf("expected offset 5 after '}', got %d", m.viewport.YOffset)
+	}
+
+	// 4. '{' jumps 5 lines up
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'{'}})
+	m = u.(*Model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected offset 0 after '{', got %d", m.viewport.YOffset)
+	}
+
+	// 5. 'G' jumps to bottom
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = u.(*Model)
+	if m.viewport.YOffset == 0 {
+		t.Fatalf("expected offset to be near bottom after 'G', got 0")
+	}
+
+	// 6. Double 'g' ('gg') jumps to top
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = u.(*Model)
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = u.(*Model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected offset 0 after 'gg', got %d", m.viewport.YOffset)
+	}
+}
+
+func TestModelVimChecklistToggle(t *testing.T) {
+	content := `- [ ] Setup database
+- [ ] Run migrations`
+
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c-tasks", Title: "Tasks Card", Content: content})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 20
+	m.updateViewportSize()
+
+	// 1. Press space to toggle first task
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = u.(*Model)
+	card1 := m.store.List()[0]
+	if !strings.Contains(card1.Content, "- [x] Setup database") {
+		t.Fatalf("expected first task checked, got: %s", card1.Content)
+	}
+
+	// 2. Press space again to toggle second task
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = u.(*Model)
+	card2 := m.store.List()[0]
+	if !strings.Contains(card2.Content, "- [x] Run migrations") {
+		t.Fatalf("expected second task checked, got: %s", card2.Content)
+	}
+
+	// 3. Press space a third time to reset
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = u.(*Model)
+	card3 := m.store.List()[0]
+	if strings.Contains(card3.Content, "- [x]") {
+		t.Fatalf("expected all tasks reset, got: %s", card3.Content)
+	}
+}
+
+func TestModelVimFoldToggle(t *testing.T) {
+	content := "Config:\n```yaml\nserver:\n  port: 8080\n  host: 0.0.0.0\n```\nDone."
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c-fold", Title: "Fold Card", Content: content})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 20
+	m.updateViewportSize()
+
+	// Press 'Z' to fold code
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
+	m = u.(*Model)
+	if !m.isFolded {
+		t.Fatalf("expected isFolded to be true")
+	}
+	if !strings.Contains(m.viewport.View(), "folded") {
+		t.Fatalf("expected folded indicator in viewport view, got: %s", m.viewport.View())
+	}
+
+	// Press 'Z' again to expand code
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
+	m = u.(*Model)
+	if m.isFolded {
+		t.Fatalf("expected isFolded to be false")
+	}
+}
+
+func TestModelVimEditorFinished(t *testing.T) {
+	store := card.NewStore()
+	c := store.Add(&card.Card{ID: "c-edit", Title: "Edit Card", Content: "original content"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 20
+	m.updateViewportSize()
+
+	// Create temp file with new content
+	tmp, err := os.CreateTemp("", "syl-edit-test-*.md")
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
+	defer os.Remove(tmp.Name())
+	_, _ = tmp.WriteString("updated content from nvim")
+	_ = tmp.Close()
+
+	// Simulate EditorFinishedMsg
+	u, _ := m.Update(EditorFinishedMsg{
+		Err:      nil,
+		TempFile: tmp.Name(),
+		CardID:   c.ID,
+	})
+	m = u.(*Model)
+
+	updatedCard := m.store.List()[0]
+	if updatedCard.Content != "updated content from nvim" {
+		t.Fatalf("expected updated content, got: %q", updatedCard.Content)
+	}
+	if !strings.Contains(m.toast, "✓ Card updated from editor") {
+		t.Fatalf("expected success toast, got %q", m.toast)
+	}
+}
+
+func TestModelVimSearchMatchNavigation(t *testing.T) {
+	content := "Line 0: intro\n\nLine 1: apple found\n\nLine 2: middle\n\nLine 3: apple here too\n\nLine 4: end\n\nLine 5: final apple"
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c-search", Title: "Search Card", Content: content})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-session")
+	m.width = 90
+	m.height = 20
+	m.updateViewportSize()
+
+	m.searchQuery = "apple"
+	m.computeSearchMatches()
+
+	if len(m.searchMatches) != 3 {
+		t.Fatalf("expected 3 search matches, got %d", len(m.searchMatches))
+	}
+
+	// Press 'n' to jump to next match (index 1)
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = u.(*Model)
+	if m.searchMatchIdx != 1 {
+		t.Fatalf("expected searchMatchIdx 1 after 'n', got %d", m.searchMatchIdx)
+	}
+
+	// Press 'n' again to jump to index 2
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = u.(*Model)
+	if m.searchMatchIdx != 2 {
+		t.Fatalf("expected searchMatchIdx 2 after 'n', got %d", m.searchMatchIdx)
+	}
+
+	// Press 'n' again to wrap to index 0
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = u.(*Model)
+	if m.searchMatchIdx != 0 {
+		t.Fatalf("expected searchMatchIdx 0 after wrapping 'n', got %d", m.searchMatchIdx)
+	}
+
+	// Press 'N' to go back to index 2
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	m = u.(*Model)
+	if m.searchMatchIdx != 2 {
+		t.Fatalf("expected searchMatchIdx 2 after 'N', got %d", m.searchMatchIdx)
+	}
+}

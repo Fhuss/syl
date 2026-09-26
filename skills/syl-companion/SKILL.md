@@ -96,7 +96,17 @@ To ensure maximum fidelity and 1-key execution in Syl, structure responses accor
 ## 4. Key Quick Reference for Syl Users
 
 If the user asks about Syl keyboard shortcuts while chatting:
-* **`b`**: Open **Actionable Blocks Picker** &rarr; tap `1`–`9` to yank single steps/files, `s` to send to peer, `o` to open URL in browser or preview file.
+* **`w` / `Ctrl+w`**: Toggle pane focus between **[CARDS]** turns list and **[PREVIEW]** buffer.
+* **`j` / `k`**: Contextual navigation (`j`/`k` navigates cards when in Cards pane, scrolls buffer when in Preview pane).
+* **`Ctrl+e` / `Ctrl+y`**: Vim 1-line nudge down / up.
+* **`Ctrl+d` / `Ctrl+u`**: Half-page scroll down / up.
+* **`{` / `}`**: Paragraph scroll jump (5 lines up / down).
+* **`gg` / `G`**: Jump to top / bottom of preview buffer.
+* **`n` / `N`**: Jump to next / previous match in active card (from `/` search).
+* **`v` / `E`**: Open active card in `$EDITOR` (`nvim`/`vim`), saving changes on exit.
+* **`za` / `Z`**: Fold / unfold code blocks to minimize clutter.
+* **`␣` (`Space`)**: Toggle interactive markdown checklist task (`- [ ]` → `- [x]`).
+* **`b`**: Open **Actionable Blocks Picker** → tap `1`–`9` to yank single steps/files, `s` to send to peer, `o` to open URL in browser or preview file.
 * **`u`**: Instant **URL Launcher** (opens links in default browser).
 * **`/`**: Live **Fuzzy Search** across all conversation turns.
 * **`S`** (`Shift+S`): **Session Switcher** to jump between conversations without quitting.
@@ -107,3 +117,4 @@ If the user asks about Syl keyboard shortcuts while chatting:
 * **`p`**: Pin card to prevent deletion.
 * **`x`**: Drop / delete card.
 * **`?`**: Help glossary modal.
+

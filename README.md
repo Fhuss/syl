@@ -160,14 +160,23 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 
 | Key | Action |
 | :--- | :--- |
+| `w` / `Ctrl+w` | Toggle dual-pane focus (**[CARDS]** vs **[PREVIEW]**) |
+| `j` / `k` | Contextual: navigate turns in Cards pane; scroll buffer in Preview pane |
 | `↑` / `↓` | Scroll preview content up / down |
 | `PgUp` / `PgDn` | Scroll preview page up / down |
-| `Ctrl+u` / `Ctrl+d` | Half-page scroll |
-| `j` / `k` | Switch to next / previous card |
+| `Ctrl+e` / `Ctrl+y` | Vim 1-line nudge down / up |
+| `Ctrl+d` / `Ctrl+u` | Half-page scroll down / up |
+| `Ctrl+f` / `Ctrl+b` | Full-page scroll down / up |
+| `{` / `}` | Paragraph scroll jump (5 lines up / down) |
+| `gg` / `G` | Jump to top / bottom of preview buffer |
+| `n` / `N` | Jump to next / previous search match in preview buffer |
+| `v` / `E` | Open active card in `$EDITOR` (`nvim`/`vim`), reloading changes on exit |
+| `za` / `Z` | Fold / unfold fenced code blocks to reduce clutter |
+| `␣` (`Space`) | Toggle next markdown checklist item (`- [ ]` → `- [x]`) |
 | `←` / `→` | Switch to next / previous card |
 | `[` / `]` | Switch to previous / next card |
 | `Tab` / `Enter` | Toggle focus view (hide/show turns column) |
-| `b` | Surgical block & step picker (yank `1`–`9`, run `s`, open URL `o`) |
+| `b` | Surgical block & step picker (yank `1`–`9`, run `s`, open URL/file `o`) |
 | `u` | Open card URL directly in browser |
 | `/` | Quick search & filter cards interactively |
 | `S` | Switch active conversation session without quitting |
@@ -180,7 +189,6 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 | `h` | Toggle revision history for selected card |
 | `s` | Send card reference or block to peer terminal (`cmux`, `tmux`, clipboard) |
 | `?` / `F1` | Toggle help glossary modal |
-| `Space` | Advance turn (demo mode only) |
 | `q` / `Ctrl+C` | Quit (saves session snapshot to disk) |
 
 ---

@@ -1,6 +1,7 @@
 package card
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -144,3 +145,50 @@ func TestFileBadgeResolution(t *testing.T) {
 		}
 	}
 }
+
+func TestToggleTaskCheckbox(t *testing.T) {
+	content := `- [ ] Step 1: Install deps
+- [ ] Step 2: Migrate DB`
+
+	// 1. Toggle first task
+	c1, ok, toast1 := ToggleTaskCheckbox(content)
+	if !ok || !strings.Contains(c1, "- [x] Step 1: Install deps") {
+		t.Fatalf("expected step 1 checked, got: %s", c1)
+	}
+	if !strings.Contains(toast1, "Completed: Step 1") {
+		t.Errorf("unexpected toast: %s", toast1)
+	}
+
+	// 2. Toggle second task
+	c2, ok, toast2 := ToggleTaskCheckbox(c1)
+	if !ok || !strings.Contains(c2, "- [x] Step 2: Migrate DB") {
+		t.Fatalf("expected step 2 checked, got: %s", c2)
+	}
+	if !strings.Contains(toast2, "Completed: Step 2") {
+		t.Errorf("unexpected toast: %s", toast2)
+	}
+
+	// 3. When all checked, reset to unchecked
+	c3, ok, toast3 := ToggleTaskCheckbox(c2)
+	if !ok || strings.Contains(c3, "- [x]") {
+		t.Fatalf("expected all reset to unchecked, got: %s", c3)
+	}
+	if !strings.Contains(toast3, "Reset") {
+		t.Errorf("unexpected reset toast: %s", toast3)
+	}
+}
+
+func TestFoldCodeBlocks(t *testing.T) {
+	content := `Here is the setup:
+` + "```bash\nline 1\nline 2\nline 3\n```" + `
+Done!`
+
+	folded := FoldCodeBlocks(content)
+	if !strings.Contains(folded, "folded, 'za' to expand") {
+		t.Fatalf("expected folded indicator, got: %s", folded)
+	}
+	if strings.Contains(folded, "line 2") {
+		t.Fatalf("expected code body to be folded away, got: %s", folded)
+	}
+}
+
