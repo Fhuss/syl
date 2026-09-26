@@ -9,8 +9,14 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/harness"
+	"github.com/Fhuss/syl/pkg/multiplexer"
+	"github.com/Fhuss/syl/pkg/reconciler"
+	"github.com/Fhuss/syl/pkg/watcher"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -18,11 +24,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/Fhuss/syl/pkg/card"
-	"github.com/Fhuss/syl/pkg/harness"
-	"github.com/Fhuss/syl/pkg/multiplexer"
-	"github.com/Fhuss/syl/pkg/reconciler"
-	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 var codeFenceRegex = regexp.MustCompile("(?s)```(?:[a-zA-Z0-9_-]+)?\n(.*?)\n```")
@@ -50,22 +51,31 @@ type EditorFinishedMsg struct {
 }
 
 type TurnReceivedMsg struct {
-	Turn *watcher.Turn
+	Turn       *watcher.Turn
+	Generation uint64
+}
+
+type agentActivityMsg struct {
+	Activity   watcher.AgentActivity
+	Generation uint64
 }
 
 type MutationsAppliedMsg struct {
-	Mutations []reconciler.Mutation
-	Turn      *watcher.Turn
+	Mutations  []reconciler.Mutation
+	Turn       *watcher.Turn
+	Generation uint64
 }
 
 type TitleSummarizedMsg struct {
-	CardID string
-	Title  string
-	Turn   *watcher.Turn
+	CardID     string
+	Title      string
+	Turn       *watcher.Turn
+	Generation uint64
 }
 
 type ReconcileFailedMsg struct {
-	Err error
+	Err        error
+	Generation uint64
 }
 
 type ClearToastMsg struct{}
@@ -79,28 +89,33 @@ type Button struct {
 }
 
 type Model struct {
-	store         *card.Store
-	reconciler    reconciler.Reconciler
-	harness       harness.Harness
-	runner        *harness.Runner
-	turnCh        chan *watcher.Turn
-	activityCh    chan watcher.AgentActivity
-	selectedIndex int
-	viewMode      ViewMode
-	isDemo        bool
-	demoStep      int
-	width         int
-	height        int
-	toast         string
-	reconciling   bool
-	renderer      *glamour.TermRenderer
-	viewport      viewport.Model
-	buttons       []Button
-	sessionLabel  string
-	spinner       spinner.Model
-	isAgentBusy   bool
-	agentTool     string
-	agentPrompt   string
+	store             *card.Store
+	reconciler        reconciler.Reconciler
+	harness           harness.Harness
+	runner            *harness.Runner
+	turnCh            chan *watcher.Turn
+	activityCh        chan watcher.AgentActivity
+	watchCtx          context.Context
+	watchCancel       context.CancelFunc
+	reconcileMu       sync.Mutex
+	generation        uint64
+	pendingTurns      []*watcher.Turn
+	selectedIndex     int
+	viewMode          ViewMode
+	isDemo            bool
+	demoStep          int
+	width             int
+	height            int
+	toast             string
+	reconciling       bool
+	renderer          *glamour.TermRenderer
+	viewport          viewport.Model
+	buttons           []Button
+	sessionLabel      string
+	spinner           spinner.Model
+	isAgentBusy       bool
+	agentTool         string
+	agentPrompt       string
 	showRaw           bool
 	showHelp          bool
 	sessionFilePath   string
@@ -162,7 +177,10 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 		rnr = harness.NewRunner(h, 1)
 	}
 
+	watchCtx, watchCancel := context.WithCancel(context.Background())
 	m := &Model{
+		watchCtx:          watchCtx,
+		watchCancel:       watchCancel,
 		store:             store,
 		reconciler:        rec,
 		harness:           h,
@@ -207,41 +225,94 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// StopWatching cancels the active file tail and pending channel listeners.
+func (m *Model) StopWatching() {
+	if m.watchCancel != nil {
+		m.watchCancel()
+	}
+}
+
+// StartWatching owns the watcher and its listeners so switching sessions can
+// cancel the previous file tail instead of mixing two conversations.
+func (m *Model) StartWatching(path string) {
+	m.StopWatching()
+	ctx, cancel := context.WithCancel(context.Background())
+	m.watchCtx, m.watchCancel = ctx, cancel
+	m.generation++
+	m.turnCh = make(chan *watcher.Turn, 100)
+	m.activityCh = make(chan watcher.AgentActivity, 20)
+	turns, activity := m.turnCh, m.activityCh
+	go func() {
+		if err := watcher.NewFileWatcher(path).Watch(ctx, turns, activity); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Watcher error: %v\n", err)
+		}
+	}()
+}
+
 func (m *Model) listenForActivity() tea.Cmd {
+	ch, ctx, generation := m.activityCh, m.watchCtx, m.generation
 	return func() tea.Msg {
-		if m.activityCh == nil {
-			return nil
+		select {
+		case act, ok := <-ch:
+			if ok {
+				return agentActivityMsg{Activity: act, Generation: generation}
+			}
+		case <-ctx.Done():
 		}
-		act, ok := <-m.activityCh
-		if !ok {
-			return nil
-		}
-		return act
+		return nil
 	}
 }
 
 func (m *Model) listenForTurns() tea.Cmd {
+	ch, ctx, generation := m.turnCh, m.watchCtx, m.generation
 	return func() tea.Msg {
-		turn, ok := <-m.turnCh
-		if !ok {
-			return nil
+		select {
+		case turn, ok := <-ch:
+			if ok {
+				return TurnReceivedMsg{Turn: turn, Generation: generation}
+			}
+		case <-ctx.Done():
 		}
-		return TurnReceivedMsg{Turn: turn}
+		return nil
 	}
 }
 
 func (m *Model) applyReconcile(turn *watcher.Turn) tea.Cmd {
-	return func() tea.Msg {
-		cards := m.store.List()
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		muts, err := m.reconciler.Reconcile(ctx, cards, turn)
-		if err != nil {
-			return ReconcileFailedMsg{Err: err}
-		}
-		return MutationsAppliedMsg{Mutations: muts, Turn: turn}
+	// Snapshot inputs before starting a Bubble Tea command on another goroutine.
+	// Reconciler jobs are serialized to preserve transcript order.
+	cards := m.store.List()
+	copies := make([]*card.Card, len(cards))
+	for i, c := range cards {
+		copyCard := *c
+		copyCard.History = append([]card.CardVersion(nil), c.History...)
+		copies[i] = &copyCard
 	}
+	rec, generation, sessionCtx := m.reconciler, m.generation, m.watchCtx
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(sessionCtx, 20*time.Second)
+		defer cancel()
+		m.reconcileMu.Lock()
+		defer m.reconcileMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return ReconcileFailedMsg{Err: err, Generation: generation}
+		}
+		muts, err := rec.Reconcile(ctx, copies, turn)
+		if err != nil {
+			return ReconcileFailedMsg{Err: err, Generation: generation}
+		}
+		return MutationsAppliedMsg{Mutations: muts, Turn: turn, Generation: generation}
+	}
+}
+
+func (m *Model) nextPendingTurn() tea.Cmd {
+	if len(m.pendingTurns) == 0 {
+		m.reconciling = false
+		return nil
+	}
+	turn := m.pendingTurns[0]
+	m.pendingTurns = m.pendingTurns[1:]
+	m.reconciling = true
+	return m.applyReconcile(turn)
 }
 
 func (m *Model) advanceDemo() tea.Cmd {
@@ -812,8 +883,6 @@ func (m *Model) actionOpenFile(path string) tea.Cmd {
 	})
 }
 
-
-
 func (m *Model) actionOpenURL() tea.Cmd {
 	cards := m.store.List()
 	if len(cards) == 0 || m.selectedIndex >= len(cards) {
@@ -937,6 +1006,9 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.store = card.NewStore()
 	m.selectedIndex = 0
 	m.lastTurnProcessed = 0
+	m.pendingTurns = nil
+	m.reconciling = false
+	m.isAgentBusy = false
 	m.showSessionSwitcher = false
 
 	if path, err := card.SessionFilePath(sess.ShortID); err == nil {
@@ -958,12 +1030,7 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.harness = harness.NewAutoHarness(harnessChoice, "")
 	m.runner = harness.NewRunner(m.harness, 1)
 
-	m.turnCh = make(chan *watcher.Turn, 100)
-	m.activityCh = make(chan watcher.AgentActivity, 20)
-	fw := watcher.NewFileWatcher(sess.Path)
-	go func() {
-		_ = fw.Watch(context.Background(), m.turnCh, m.activityCh)
-	}()
+	m.StartWatching(sess.Path)
 
 	m.toast = fmt.Sprintf("✓ Switched to session [%s] (%s)", sess.ShortID, sess.Agent)
 	m.updateViewportContent()
@@ -1046,7 +1113,7 @@ func (m *Model) buildBlockPickerModal() string {
 
 			line := fmt.Sprintf("%s%s %-10s %s", prefix, keyStyle.Render(keyStr), badgeRendered, prev)
 			if isSelected {
-				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth - 4).Render(line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth-4).Render(line) + "\n")
 			} else {
 				b.WriteString(line + "\n")
 			}
@@ -1119,7 +1186,7 @@ func (m *Model) buildSessionSwitcherModal() string {
 
 			line := fmt.Sprintf("%s%s %s %s %s", prefix, agentStyle.Render(agentTag), idRendered, lipgloss.NewStyle().Render(titleText), timeStyle.Render(timeAgo))
 			if isSelected {
-				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth - 4).Render(line) + "\n")
+				b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth-4).Render(line) + "\n")
 			} else {
 				b.WriteString(line + "\n")
 			}
@@ -1357,19 +1424,16 @@ func (m *Model) renderHelpModal() string {
 }
 
 func (m *Model) summarizeCardTitle(cardID string, turn *watcher.Turn) tea.Cmd {
+	runner, label, generation := m.runner, m.sessionLabel, m.generation
 	return func() tea.Msg {
-		if m.runner == nil || turn == nil {
+		if runner == nil || turn == nil {
 			return nil
 		}
-		title, err := m.runner.SummarizeTurn(context.Background(), m.sessionLabel, turn)
+		title, err := runner.SummarizeTurn(context.Background(), label, turn)
 		if err != nil || title == "" {
 			return nil
 		}
-		return TitleSummarizedMsg{
-			CardID: cardID,
-			Title:  title,
-			Turn:   turn,
-		}
+		return TitleSummarizedMsg{CardID: cardID, Title: title, Turn: turn, Generation: generation}
 	}
 }
 
@@ -1457,6 +1521,7 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		m.toast = "Demo finished! All turns demonstrated."
 	case "quit":
 		m.saveSessionState()
+		m.StopWatching()
 		return tea.Quit
 	}
 	return nil
@@ -1501,13 +1566,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
-	case watcher.AgentActivity:
+	case agentActivityMsg:
+		if msg.Generation != m.generation {
+			return m, nil
+		}
+		m.isAgentBusy = msg.Activity.IsBusy
+		m.agentTool = msg.Activity.Tool
+		m.agentPrompt = msg.Activity.Prompt
+		return m, m.listenForActivity()
+
+	case watcher.AgentActivity: // Keep direct activity messages usable by embedders.
 		m.isAgentBusy = msg.IsBusy
 		m.agentTool = msg.Tool
 		m.agentPrompt = msg.Prompt
 		return m, m.listenForActivity()
 
 	case TurnReceivedMsg:
+		if msg.Generation != m.generation {
+			return m, nil
+		}
 		m.isAgentBusy = false
 		if msg.Turn != nil && msg.Turn.ID <= m.lastTurnProcessed {
 			// Turn was already processed in a saved snapshot.
@@ -1526,11 +1603,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.listenForTurns()
 		}
 
+		if m.reconciling {
+			m.pendingTurns = append(m.pendingTurns, msg.Turn)
+			return m, m.listenForTurns()
+		}
 		m.reconciling = true
 		return m, tea.Batch(m.applyReconcile(msg.Turn), m.listenForTurns())
 
 	case MutationsAppliedMsg:
-		m.reconciling = false
+		if msg.Generation != m.generation {
+			return m, nil
+		}
 		if msg.Turn != nil && msg.Turn.ID > m.lastTurnProcessed {
 			m.lastTurnProcessed = msg.Turn.ID
 		}
@@ -1600,9 +1683,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
 		}))
+		cmds = append(cmds, m.nextPendingTurn())
 		return m, tea.Batch(cmds...)
 
 	case TitleSummarizedMsg:
+		if msg.Generation != m.generation {
+			return m, nil
+		}
 		if m.store.UpdateTitle(msg.CardID, msg.Title) {
 			m.updateViewportContent()
 			m.saveSessionState()
@@ -1614,9 +1701,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ReconcileFailedMsg:
-		m.reconciling = false
+		if msg.Generation != m.generation {
+			return m, nil
+		}
 		m.toast = fmt.Sprintf("Error: %v", msg.Err)
-		return m, nil
+		return m, m.nextPendingTurn()
 
 	case ClearToastMsg:
 		m.toast = ""
@@ -1887,6 +1976,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.saveSessionState()
+			m.StopWatching()
 			return m, tea.Quit
 
 		case "?", "f1":
@@ -2555,7 +2645,7 @@ func (m *Model) renderDetailFocus(cards []*card.Card) string {
 
 	banner := lipgloss.NewStyle().
 		Background(ColorHighlight).
-		Width(m.width - 2).
+		Width(m.width-2).
 		Padding(0, 1).
 		Render(bannerLine)
 

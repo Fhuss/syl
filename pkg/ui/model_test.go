@@ -3,14 +3,15 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/harness"
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/watcher"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestMain(m *testing.M) {
@@ -21,6 +22,50 @@ func TestMain(m *testing.M) {
 		defer os.RemoveAll(tmpDir)
 	}
 	os.Exit(m.Run())
+}
+
+func TestSwitchSessionIgnoresOldWatcherEvents(t *testing.T) {
+	oldPath := filepath.Join(t.TempDir(), "old.jsonl")
+	newPath := filepath.Join(t.TempDir(), "new.jsonl")
+	for _, path := range []string{oldPath, newPath} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "old")
+	m.StartWatching(oldPath)
+	oldCtx, oldGeneration := m.watchCtx, m.generation
+	m.actionSwitchSession(watcher.SessionInfo{Path: newPath, ShortID: "new", Agent: "pi"})
+	defer m.StopWatching()
+	if oldCtx.Err() == nil || m.generation == oldGeneration {
+		t.Fatal("old watcher was not canceled on session switch")
+	}
+	oldTurn := &watcher.Turn{ID: 1, User: "old prompt", Assistant: "```bash\necho old\n```"}
+	m.Update(TurnReceivedMsg{Turn: oldTurn, Generation: oldGeneration})
+	m.Update(MutationsAppliedMsg{Turn: oldTurn, Generation: oldGeneration, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "old", Content: "old"}}})
+	if len(m.store.List()) != 0 || m.lastTurnProcessed != 0 {
+		t.Fatalf("old session changed new store: %+v", m.store.List())
+	}
+}
+
+func TestReconciliationQueuesTurnsInOrder(t *testing.T) {
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "queue")
+	defer m.StopWatching()
+	first := &watcher.Turn{ID: 1, User: "first", Assistant: "```bash\necho first\n```"}
+	second := &watcher.Turn{ID: 2, User: "second", Assistant: "```bash\necho second\n```"}
+	m.reconciling = true
+	m.Update(TurnReceivedMsg{Turn: second})
+	if len(m.pendingTurns) != 1 {
+		t.Fatal("second turn should wait for first reconciliation")
+	}
+	m.Update(MutationsAppliedMsg{Turn: first, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "first", Content: "first"}}})
+	if len(m.pendingTurns) != 0 || !m.reconciling || m.lastTurnProcessed != 1 {
+		t.Fatal("queued second turn was not scheduled after first")
+	}
+	m.Update(MutationsAppliedMsg{Turn: second, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "second", Content: "second"}}})
+	if len(m.store.List()) != 2 || m.lastTurnProcessed != 2 || m.reconciling {
+		t.Fatalf("turns not applied in order: %+v", m.store.List())
+	}
 }
 
 func TestModelDropAndPin(t *testing.T) {

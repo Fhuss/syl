@@ -178,6 +178,15 @@ func TestHeuristicNoSubstringFalsePositive(t *testing.T) {
 	}
 }
 
+func TestHeuristicUnrelatedCorrectionDoesNotOverwriteCard(t *testing.T) {
+	existing := []*card.Card{{ID: "deployment", Title: "Production deployment", Content: "```bash\naws deploy prod\n```"}}
+	turn := &watcher.Turn{ID: 2, User: "Can you fix a README typo?", Assistant: "Use this documentation edit:\n```bash\nsed -i '' s/teh/the/ README.md\n```"}
+	muts, err := NewHeuristicReconciler().Reconcile(context.Background(), existing, turn)
+	if err != nil || len(muts) != 1 || muts[0].Op != OpAdd {
+		t.Fatalf("unrelated correction must create its own card, got %+v, %v", muts, err)
+	}
+}
+
 func TestHeuristicIndependentTurnsInSameLanguage(t *testing.T) {
 	h := NewHeuristicReconciler()
 	ctx := context.Background()

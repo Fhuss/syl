@@ -17,16 +17,17 @@ var userRequestRegex = regexp.MustCompile(`(?s)<USER_REQUEST>(.*?)</USER_REQUEST
 
 // TranscriptRecord represents a single JSON line in an Antigravity, Claude Code, or generic agent transcript.
 type TranscriptRecord struct {
-	StepIndex int    `json:"step_index"`
-	Source    string `json:"source"`
-	Type      string `json:"type"`
-	Role      string `json:"role"`
-	Status    string `json:"status"`
-	Content   string `json:"content"`
-	Text      string `json:"text"`
-	Message   string `json:"message"`
-	CreatedAt string `json:"created_at"`
-	ToolCalls []struct {
+	StepIndex  int    `json:"step_index"`
+	Source     string `json:"source"`
+	Type       string `json:"type"`
+	Role       string `json:"role"`
+	Status     string `json:"status"`
+	StopReason string `json:"stopReason"`
+	Content    string `json:"content"`
+	Text       string `json:"text"`
+	Message    string `json:"message"`
+	CreatedAt  string `json:"created_at"`
+	ToolCalls  []struct {
 		Name string `json:"name"`
 	} `json:"tool_calls"`
 }
@@ -76,11 +77,15 @@ func (r *TranscriptRecord) UnmarshalJSON(data []byte) error {
 		} else {
 			var nested struct {
 				Role       string          `json:"role"`
+				StopReason string          `json:"stopReason"`
 				RawContent json.RawMessage `json:"content"`
 			}
 			if err := json.Unmarshal(raw.RawMessage, &nested); err == nil {
 				if nested.Role != "" && r.Role == "" {
 					r.Role = nested.Role
+				}
+				if nested.StopReason != "" {
+					r.StopReason = nested.StopReason
 				}
 				if r.Content == "" && len(nested.RawContent) > 0 {
 					var text string
@@ -101,7 +106,7 @@ func (r *TranscriptRecord) UnmarshalJSON(data []byte) error {
 									}
 									sb.WriteString(b.Text)
 								}
-								if (b.Type == "tool_use" || b.Type == "tool_call") && b.Name != "" {
+								if (b.Type == "tool_use" || b.Type == "tool_call" || b.Type == "toolCall") && b.Name != "" {
 									r.ToolCalls = append(r.ToolCalls, struct {
 										Name string `json:"name"`
 									}{Name: b.Name})
@@ -220,6 +225,17 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 						Timestamp: time.Now(),
 					})
 				}
+			} else if rec.IsAssistant() && rec.StopReason == "toolUse" {
+				// Pi persists intermediate assistant messages before tool results.
+				// Their text is not the final answer for this user turn.
+				if pendingUser == "" || isCatchingUp {
+					continue
+				}
+				toolName := "Thinking..."
+				if len(rec.ToolCalls) > 0 {
+					toolName = "Running " + rec.ToolCalls[0].Name
+				}
+				sendActivity(AgentActivity{IsBusy: true, Prompt: pendingUser, Tool: toolName, Timestamp: time.Now()})
 			} else if len(rec.ToolCalls) > 0 && pendingUser != "" && !isCatchingUp {
 				toolName := rec.ToolCalls[0].Name
 				sendActivity(AgentActivity{
@@ -250,6 +266,12 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 						IsBusy:    false,
 						Timestamp: time.Now(),
 					})
+				}
+			} else if rec.IsAssistant() && rec.StopReason == "stop" && pendingUser != "" {
+				// A completed Pi turn with no text should not leave the busy indicator on.
+				pendingUser = ""
+				if !isCatchingUp {
+					sendActivity(AgentActivity{IsBusy: false, Timestamp: time.Now()})
 				}
 			}
 		}

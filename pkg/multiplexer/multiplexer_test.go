@@ -41,6 +41,14 @@ func TestParseCmuxPanels(t *testing.T) {
 		t.Errorf("expected surface:5 with full path syl, got %s", peerFullPath)
 	}
 
+	// A Pi conversation titled with "Syl" is still the peer, not Syl itself.
+	piAboutSyl := `  surface:34 terminal "π - Fix Syl session detection"
+* surface:36 terminal [focused] "syl"`
+	peerAboutSyl, okAboutSyl := ParseCmuxPanels(piAboutSyl, "surface:36")
+	if !okAboutSyl || peerAboutSyl != "surface:34" {
+		t.Fatalf("expected Pi pane surface:34 despite its title, got %q (%v)", peerAboutSyl, okAboutSyl)
+	}
+
 	// Mixed with browser surface
 	mixedOutput := `  surface:1  browser   "Documentation"
   surface:2  terminal  "syl"
