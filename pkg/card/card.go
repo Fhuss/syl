@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Fhuss/syl/internal/atomicfile"
 )
 
 type CardType string
@@ -329,8 +331,18 @@ func SessionFilePath(sessionID string) (string, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
+	}
+	// Tighten directories created by older Syl versions as well: this also
+	// protects snapshots not yet rewritten with the new private file mode.
+	// Do not change the permissions of a user-selected symlink destination.
+	if info, err := os.Lstat(dir); err != nil {
+		return "", err
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		if err := os.Chmod(dir, 0700); err != nil {
+			return "", err
+		}
 	}
 	return filepath.Join(dir, fmt.Sprintf("%s.json", sessionID)), nil
 }
@@ -359,10 +371,7 @@ func (s *Store) SaveSnapshot(filePath string, sessionID string, lastTurnProcesse
 		return err
 	}
 
-	dir := filepath.Dir(filePath)
-	_ = os.MkdirAll(dir, 0755)
-
-	return os.WriteFile(filePath, data, 0644)
+	return atomicfile.Write(filePath, data)
 }
 
 // LoadSnapshot loads cards and state from a session snapshot file.
@@ -395,4 +404,3 @@ func (s *Store) LoadSnapshot(filePath string) (*SessionSnapshot, error) {
 
 	return &snap, nil
 }
-

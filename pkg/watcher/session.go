@@ -343,7 +343,7 @@ func FindSessionByID(query string) (*SessionInfo, error) {
 	}
 
 	// 2. Discover sessions from supported agents
-	sessions, err := ListSessions(100)
+	sessions, err := ListSessions(0)
 	if err != nil {
 		return nil, err
 	}

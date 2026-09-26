@@ -45,9 +45,10 @@ const (
 )
 
 type EditorFinishedMsg struct {
-	Err      error
-	TempFile string
-	CardID   string
+	Err        error
+	TempFile   string
+	CardID     string
+	Generation uint64
 }
 
 type TurnReceivedMsg struct {
@@ -75,6 +76,13 @@ type TitleSummarizedMsg struct {
 
 type ReconcileFailedMsg struct {
 	Err        error
+	Turn       *watcher.Turn
+	Generation uint64
+}
+
+type retryReconcileMsg struct {
+	TurnID     int
+	Attempt    int
 	Generation uint64
 }
 
@@ -100,6 +108,8 @@ type Model struct {
 	reconcileMu       sync.Mutex
 	generation        uint64
 	pendingTurns      []*watcher.Turn
+	failedTurn        *watcher.Turn
+	reconcileAttempts int
 	selectedIndex     int
 	viewMode          ViewMode
 	isDemo            bool
@@ -294,14 +304,23 @@ func (m *Model) applyReconcile(turn *watcher.Turn) tea.Cmd {
 		m.reconcileMu.Lock()
 		defer m.reconcileMu.Unlock()
 		if err := ctx.Err(); err != nil {
-			return ReconcileFailedMsg{Err: err, Generation: generation}
+			return ReconcileFailedMsg{Err: err, Turn: turn, Generation: generation}
 		}
 		muts, err := rec.Reconcile(ctx, copies, turn)
 		if err != nil {
-			return ReconcileFailedMsg{Err: err, Generation: generation}
+			return ReconcileFailedMsg{Err: err, Turn: turn, Generation: generation}
 		}
 		return MutationsAppliedMsg{Mutations: muts, Turn: turn, Generation: generation}
 	}
+}
+
+func (m *Model) retryFailedTurn() tea.Cmd {
+	if m.failedTurn == nil || m.reconciling {
+		return nil
+	}
+	m.reconciling = true
+	m.toast = "Retrying card capture..."
+	return m.applyReconcile(m.failedTurn)
 }
 
 func (m *Model) nextPendingTurn() tea.Cmd {
@@ -576,20 +595,35 @@ func (m *Model) actionOpenInEditor() tea.Cmd {
 		return nil
 	}
 
-	tempDir := os.TempDir()
-	tempFile := filepath.Join(tempDir, fmt.Sprintf("syl-%s.md", c.ID))
-	if err := os.WriteFile(tempFile, []byte(c.Content), 0o600); err != nil {
+	file, err := os.CreateTemp("", "syl-*.md")
+	if err != nil {
 		m.toast = fmt.Sprintf("Error creating temp file: %v", err)
 		return nil
 	}
+	tempFile := file.Name()
+	if _, err = file.WriteString(c.Content); err != nil {
+		file.Close()
+		os.Remove(tempFile)
+		m.toast = fmt.Sprintf("Error writing temp file: %v", err)
+		return nil
+	}
+	if err = file.Close(); err != nil {
+		os.Remove(tempFile)
+		m.toast = fmt.Sprintf("Error closing temp file: %v", err)
+		return nil
+	}
 
-	cmd := exec.Command(editor, tempFile)
+	// $EDITOR commonly includes flags and can contain a quoted executable path.
+	args, err := parseEditorCommand(editor)
+	if err != nil {
+		os.Remove(tempFile)
+		m.toast = fmt.Sprintf("Invalid editor command: %v", err)
+		return nil
+	}
+	cmd := exec.Command(args[0], append(args[1:], tempFile)...)
+	generation := m.generation
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return EditorFinishedMsg{
-			Err:      err,
-			TempFile: tempFile,
-			CardID:   c.ID,
-		}
+		return EditorFinishedMsg{Err: err, TempFile: tempFile, CardID: c.ID, Generation: generation}
 	})
 }
 
@@ -1007,6 +1041,8 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.selectedIndex = 0
 	m.lastTurnProcessed = 0
 	m.pendingTurns = nil
+	m.failedTurn = nil
+	m.reconcileAttempts = 0
 	m.reconciling = false
 	m.isAgentBusy = false
 	m.showSessionSwitcher = false
@@ -1285,6 +1321,7 @@ func (m *Model) buildHelpModal() string {
 	b.WriteString(renderBadgeRow("/", BadgeKeyWarning, "Find Cards", "Search & filter reference cards interactively") + "\n")
 	b.WriteString(renderBadgeRow("n / N", BadgeKeyWarning, "Next / Prev Match", "Jump to next or previous in-card search match") + "\n")
 	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Switch active conversation session (agy, claude, pi)") + "\n")
+	b.WriteString(renderBadgeRow("R", BadgeKeyWarning, "Retry Capture", "Retry a failed card turn before later turns are processed") + "\n")
 	b.WriteString(renderBadgeRow("p", BadgeKeyWarning, "Pin Card", "Pin / unpin card (protect from pruning)") + "\n")
 	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
 	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop / delete card from reference pane") + "\n")
@@ -1539,13 +1576,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case EditorFinishedMsg:
+		defer os.Remove(msg.TempFile)
+		if msg.Generation != m.generation {
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.toast = fmt.Sprintf("Editor exited: %v", msg.Err)
 		} else if data, err := os.ReadFile(msg.TempFile); err == nil {
 			newContent := string(data)
-			cards := m.store.List()
-			if len(cards) > 0 && m.selectedIndex < len(cards) {
-				c := cards[m.selectedIndex]
+			if c, ok := m.store.Get(msg.CardID); ok {
 				if strings.TrimSpace(newContent) != strings.TrimSpace(c.Content) && strings.TrimSpace(newContent) != "" {
 					m.store.Update(c.ID, newContent, "Edited in editor")
 					m.saveSessionState()
@@ -1554,9 +1593,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.toast = "No changes made in editor"
 				}
+			} else {
+				m.toast = "Edited card no longer exists"
 			}
+		} else {
+			m.toast = fmt.Sprintf("Error reading edited card: %v", err)
 		}
-		_ = os.Remove(msg.TempFile)
 		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
 		})
@@ -1603,7 +1645,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.listenForTurns()
 		}
 
-		if m.reconciling {
+		if m.reconciling || m.failedTurn != nil {
 			m.pendingTurns = append(m.pendingTurns, msg.Turn)
 			return m, m.listenForTurns()
 		}
@@ -1614,6 +1656,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation != m.generation {
 			return m, nil
 		}
+		m.failedTurn = nil
+		m.reconcileAttempts = 0
 		if msg.Turn != nil && msg.Turn.ID > m.lastTurnProcessed {
 			m.lastTurnProcessed = msg.Turn.ID
 		}
@@ -1704,8 +1748,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Generation != m.generation {
 			return m, nil
 		}
-		m.toast = fmt.Sprintf("Error: %v", msg.Err)
-		return m, m.nextPendingTurn()
+		m.reconciling = false
+		if msg.Turn == nil {
+			m.toast = fmt.Sprintf("Card capture failed: %v", msg.Err)
+			return m, nil
+		}
+		m.failedTurn = msg.Turn
+		m.reconcileAttempts++
+		m.toast = fmt.Sprintf("Capture paused on turn %d: %v", msg.Turn.ID, msg.Err)
+		// Never checkpoint later turns past this failure. Retry twice, then
+		// keep the backlog until the user presses R or restarts Syl.
+		if m.reconcileAttempts < 3 {
+			generation, id, attempt := m.generation, msg.Turn.ID, m.reconcileAttempts
+			delay := time.Duration(attempt) * time.Second
+			return m, tea.Tick(delay, func(time.Time) tea.Msg {
+				return retryReconcileMsg{TurnID: id, Attempt: attempt, Generation: generation}
+			})
+		}
+		return m, nil
+
+	case retryReconcileMsg:
+		if msg.Generation != m.generation || m.failedTurn == nil || m.failedTurn.ID != msg.TurnID || msg.Attempt != m.reconcileAttempts {
+			return m, nil
+		}
+		return m, m.retryFailedTurn()
 
 	case ClearToastMsg:
 		m.toast = ""
@@ -1834,6 +1900,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showHelp = false
 				m.actionToggleRaw()
 				return m, nil
+			case "R":
+				m.showHelp = false
+				return m, m.retryFailedTurn()
 			case "e":
 				m.showHelp = false
 				return m, m.actionExport()
@@ -2156,6 +2225,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "r":
 			m.actionToggleRaw()
+
+		case "R":
+			return m, m.retryFailedTurn()
 
 		case "c":
 			return m, m.actionCopy()
@@ -2498,7 +2570,9 @@ func (m *Model) renderBaseView() string {
 
 	// 1. Header
 	var statusBadge string
-	if m.isAgentBusy {
+	if m.failedTurn != nil && !m.reconciling {
+		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("CAPTURE PAUSED · R TO RETRY")
+	} else if m.isAgentBusy {
 		toolName := m.agentTool
 		if toolName == "" {
 			toolName = "BUSY"

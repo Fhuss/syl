@@ -2,8 +2,43 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestSaveDefaultConfigIsPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("GEMINI_API_KEY", "test-secret")
+	if err := SaveDefaultConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("config containing credentials must be private: info=%v err=%v", info, err)
+	}
+}
+
+func TestLoadDefaultConfigTightensLegacyPermissions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".config", "syl", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("llm:\n  provider: mock\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(""); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("legacy generated config must become private: info=%v err=%v", info, err)
+	}
+}
 
 func TestDefaultConfigEnvFallbacks(t *testing.T) {
 	// 1. None set -> mock

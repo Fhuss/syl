@@ -2,6 +2,7 @@ package card
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -180,6 +181,25 @@ func hasSubstr(s, substr string) bool {
 	return false
 }
 
+func TestSessionFilePathTightensExistingDirectory(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("SYL_CONFIG_DIR", configDir)
+	dir := filepath.Join(configDir, "sessions")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SessionFilePath("old"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("session directory must be private: info=%v err=%v", info, err)
+	}
+}
+
 func TestStoreSnapshotPersistence(t *testing.T) {
 	tmpFile := "./test-session-snap.json"
 	_ = os.Remove(tmpFile)
@@ -206,6 +226,10 @@ func TestStoreSnapshotPersistence(t *testing.T) {
 	err := s1.SaveSnapshot(tmpFile, "session-123", 15)
 	if err != nil {
 		t.Fatalf("failed to save snapshot: %v", err)
+	}
+
+	if info, err := os.Stat(tmpFile); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("snapshot must be private (0600): info=%v err=%v", info, err)
 	}
 
 	// Load into a fresh store
@@ -282,4 +306,3 @@ func TestStoreAddCollisionHandling(t *testing.T) {
 		t.Errorf("expected both cards preserved in order, got: %v, %v", cards[0].Title, cards[1].Title)
 	}
 }
-

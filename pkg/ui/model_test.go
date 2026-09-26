@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,18 @@ func TestSwitchSessionIgnoresOldWatcherEvents(t *testing.T) {
 	if len(m.store.List()) != 0 || m.lastTurnProcessed != 0 {
 		t.Fatalf("old session changed new store: %+v", m.store.List())
 	}
+	newCard := m.store.Add(&card.Card{ID: "same-id", Content: "new session content"})
+	temp := filepath.Join(t.TempDir(), "old-editor.md")
+	if err := os.WriteFile(temp, []byte("old session edit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(EditorFinishedMsg{TempFile: temp, CardID: newCard.ID, Generation: oldGeneration})
+	if newCard.Content != "new session content" {
+		t.Fatal("stale editor completion changed a card in the new session")
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("stale editor file was not cleaned up: %v", err)
+	}
 }
 
 func TestReconciliationQueuesTurnsInOrder(t *testing.T) {
@@ -65,6 +78,95 @@ func TestReconciliationQueuesTurnsInOrder(t *testing.T) {
 	m.Update(MutationsAppliedMsg{Turn: second, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "second", Content: "second"}}})
 	if len(m.store.List()) != 2 || m.lastTurnProcessed != 2 || m.reconciling {
 		t.Fatalf("turns not applied in order: %+v", m.store.List())
+	}
+}
+
+func TestReconcileFailureBlocksLaterCheckpointsUntilRetry(t *testing.T) {
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "failed-turn-test")
+	defer m.StopWatching()
+	first := &watcher.Turn{ID: 1, User: "first", Assistant: "```bash\necho first\n```"}
+	second := &watcher.Turn{ID: 2, User: "second", Assistant: "```bash\necho second\n```"}
+	m.Update(ReconcileFailedMsg{Err: errors.New("API unavailable"), Turn: first})
+	m.Update(TurnReceivedMsg{Turn: second})
+	if m.lastTurnProcessed != 0 || m.failedTurn != first || len(m.pendingTurns) != 1 {
+		t.Fatalf("failed turn should block later checkpoint: last=%d pending=%d", m.lastTurnProcessed, len(m.pendingTurns))
+	}
+	m.Update(retryReconcileMsg{TurnID: 1, Attempt: 1})
+	if !m.reconciling {
+		t.Fatal("automatic retry did not start")
+	}
+	m.Update(ReconcileFailedMsg{Err: errors.New("API unavailable"), Turn: first})
+	m.Update(retryReconcileMsg{TurnID: 1, Attempt: 2})
+	m.Update(ReconcileFailedMsg{Err: errors.New("API unavailable"), Turn: first})
+	if m.lastTurnProcessed != 0 || m.reconciling || m.failedTurn != first {
+		t.Fatal("exhausted retries must leave the failed turn recoverable")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	if !m.reconciling {
+		t.Fatal("manual R did not retry failed turn")
+	}
+	m.Update(MutationsAppliedMsg{Turn: first, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "first", Content: "first"}}})
+	if m.lastTurnProcessed != 1 || len(m.pendingTurns) != 0 || !m.reconciling {
+		t.Fatal("later turn should start only after failed turn succeeds")
+	}
+	m.Update(MutationsAppliedMsg{Turn: second, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "second", Content: "second"}}})
+	if m.lastTurnProcessed != 2 || m.failedTurn != nil || len(m.store.List()) != 2 {
+		t.Fatal("backlog was not processed in order")
+	}
+}
+
+func TestFailedTurnRemainsReplayableAfterRestart(t *testing.T) {
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "failed-restart")
+	m.Update(MutationsAppliedMsg{Turn: &watcher.Turn{ID: 1}, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "saved", Content: "saved"}}})
+	failed := &watcher.Turn{ID: 2, User: "failed turn"}
+	m.Update(ReconcileFailedMsg{Err: errors.New("unavailable"), Turn: failed})
+	m.Update(TurnReceivedMsg{Turn: &watcher.Turn{ID: 3, User: "later turn"}})
+	restarted := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "failed-restart")
+	if restarted.lastTurnProcessed != 1 || len(restarted.store.List()) != 1 {
+		t.Fatalf("restart skipped failed turn: last=%d cards=%d", restarted.lastTurnProcessed, len(restarted.store.List()))
+	}
+}
+
+func TestEditorRoundTripUpdatesOriginalCard(t *testing.T) {
+	store := card.NewStore()
+	first := store.Add(&card.Card{ID: "first", Content: "original first"})
+	second := store.Add(&card.Card{ID: "second", Content: "original second"})
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "editor-original")
+	m.selectedIndex = 1 // Selection changed while editing the first card.
+	path := filepath.Join(t.TempDir(), "edit.md")
+	if err := os.WriteFile(path, []byte("edited first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(EditorFinishedMsg{TempFile: path, CardID: first.ID})
+	if first.Content != "edited first" || second.Content != "original second" {
+		t.Fatalf("edited wrong card: first=%q second=%q", first.Content, second.Content)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("editor temporary file not removed: %v", err)
+	}
+}
+
+func TestEditorTempFilesAreUniqueAndPrivate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	t.Setenv("EDITOR", "vim -f")
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "first", Content: "private content"})
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "editor-temp")
+	if m.actionOpenInEditor() == nil || m.actionOpenInEditor() == nil {
+		t.Fatal("editor was not prepared")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 || entries[0].Name() == entries[1].Name() {
+		t.Fatalf("expected two unique editor files, got %v, err=%v", entries, err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		defer os.Remove(path)
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("editor file must be private: %v, err=%v", info, err)
+		}
 	}
 }
 

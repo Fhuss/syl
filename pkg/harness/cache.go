@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/Fhuss/syl/internal/atomicfile"
 )
 
 // TitleCache persists AI-summarized card titles to disk so that restarts
@@ -32,7 +34,7 @@ func GetTitleCache() *TitleCache {
 			home = os.Getenv("HOME")
 		}
 		dir := filepath.Join(home, ".config", "syl")
-		_ = os.MkdirAll(dir, 0755)
+		_ = os.MkdirAll(dir, 0700)
 		defaultCache = NewTitleCache(filepath.Join(dir, "titles.json"))
 	})
 	return defaultCache
@@ -55,6 +57,9 @@ func (tc *TitleCache) load() {
 	if err != nil {
 		return
 	}
+	if info, err := os.Lstat(tc.filePath); err == nil && info.Mode().IsRegular() {
+		_ = os.Chmod(tc.filePath, 0o600) // tighten caches created by older versions
+	}
 	_ = json.Unmarshal(data, &tc.titles)
 	if tc.titles == nil {
 		tc.titles = make(map[string]string)
@@ -69,7 +74,7 @@ func (tc *TitleCache) save() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(tc.filePath, data, 0644)
+	_ = atomicfile.Write(tc.filePath, data)
 }
 
 // IsDefinitiveTitle checks whether a title is a meaningful topic summary
