@@ -119,7 +119,8 @@ go build -o ~/.local/bin/syl ./cmd/syl
 ### Run with auto-detection (Zero-Config)
 
 ```bash
-# Automatically attaches to your latest active AI conversation
+# Attaches to the adjacent Pi session in cmux when available;
+# otherwise prefers a Pi session from the current directory, then the latest session
 syl
 ```
 
@@ -155,7 +156,7 @@ syl --harness heuristic  # Fast offline fallback (no AI calls)
 # Point at a specific transcript file
 syl --file /path/to/transcript.jsonl
 
-# Attach to a specific session by ID or prefix
+# Attach to a specific session by ID or prefix (overrides auto-detection)
 syl --session 40c1c89b
 
 # List recent sessions across all assistants

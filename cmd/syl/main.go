@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/Fhuss/syl/pkg/card"
 	"github.com/Fhuss/syl/pkg/config"
 	"github.com/Fhuss/syl/pkg/harness"
@@ -18,6 +17,7 @@ import (
 	"github.com/Fhuss/syl/pkg/skill"
 	"github.com/Fhuss/syl/pkg/ui"
 	"github.com/Fhuss/syl/pkg/watcher"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const version = "0.1.0"
@@ -254,11 +254,12 @@ Keys in TUI:
 		}
 
 		if transcriptPath == "" {
-			sessions, err := watcher.ListSessions(1)
-			if err == nil && len(sessions) > 0 {
-				transcriptPath = sessions[0].Path
-				sessionLabel = sessions[0].ShortID
-				detectedAgent = sessions[0].Agent
+			cwd, _ := os.Getwd()
+			session, err := watcher.SelectAutoSession(cwd, multiplexer.PeerSessionFile())
+			if err == nil && session != nil {
+				transcriptPath = session.Path
+				sessionLabel = session.ShortID
+				detectedAgent = session.Agent
 			}
 		}
 

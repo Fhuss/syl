@@ -1,6 +1,8 @@
 package multiplexer
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -54,6 +56,45 @@ func TestParseCmuxPanels(t *testing.T) {
 	_, okOnlySyl := ParseCmuxPanels(onlySyl, "surface:6")
 	if okOnlySyl {
 		t.Errorf("expected no peer found when only syl is running")
+	}
+}
+
+func TestParseCmuxResumeSession(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"pi checkpoint", `{"cleared":false,"restore_record":{"kind":"pi","checkpoint_id":"/tmp/session.jsonl"}}`, "/tmp/session.jsonl"},
+		{"cleared checkpoint", `{"cleared":true,"restore_record":{"kind":"pi","checkpoint_id":"/tmp/session.jsonl"}}`, ""},
+		{"other agent", `{"restore_record":{"kind":"claude","checkpoint_id":"/tmp/session.jsonl"}}`, ""},
+		{"non-file checkpoint", `{"restore_record":{"kind":"pi","checkpoint_id":"session-id"}}`, ""},
+		{"malformed response", `{`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ParseCmuxResumeSession([]byte(tt.input)); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPeerSessionFile(t *testing.T) {
+	dir := t.TempDir()
+	cmux := filepath.Join(dir, "cmux")
+	script := `#!/bin/sh
+case "$1" in
+  list-panels) printf '%s\n' '  surface:34  terminal  "pi"' '* surface:35  terminal  [focused]  "syl"' ;;
+  identify) printf '%s\n' '{"caller":{"surface_ref":"surface:35"}}' ;;
+  surface) if [ "$5" = "surface:34" ]; then printf '%s\n' '{"restore_record":{"kind":"pi","checkpoint_id":"/tmp/peer.jsonl"}}'; fi ;;
+esac
+`
+	if err := os.WriteFile(cmux, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CMUX_SURFACE_ID", "surface:35")
+	if got := PeerSessionFile(); got != "/tmp/peer.jsonl" {
+		t.Fatalf("got %q, want /tmp/peer.jsonl", got)
 	}
 }
 

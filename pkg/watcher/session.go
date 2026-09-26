@@ -265,6 +265,54 @@ func DetectAgentFromPath(path string) string {
 	return "file"
 }
 
+// SelectAutoSession prefers an exact transcript passed by the invoking agent or
+// bound to its adjacent pane. Without one, prefer sessions in the current working
+// directory over unrelated, more recently modified conversations.
+func SelectAutoSession(cwd, peerPath string) (*SessionInfo, error) {
+	for _, path := range []string{os.Getenv("PI_SESSION_FILE"), peerPath} {
+		if path == "" {
+			continue
+		}
+		if session, err := FindSessionByID(path); err == nil && session.Agent == "pi" {
+			return session, nil
+		}
+	}
+
+	sessions, err := ListSessions(0)
+	if err != nil {
+		return nil, err
+	}
+	if cwd != "" {
+		for _, session := range sessions {
+			if session.Agent == "pi" && piSessionCWD(session.Path) == cwd {
+				return &session, nil
+			}
+		}
+	}
+	if len(sessions) > 0 {
+		return &sessions[0], nil
+	}
+	return nil, nil
+}
+
+// piSessionCWD reads only the header; directory names alone can be ambiguous
+// because Pi encodes cwd by replacing path separators with hyphens.
+func piSessionCWD(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var header struct {
+		Type string `json:"type"`
+		CWD  string `json:"cwd"`
+	}
+	if json.NewDecoder(f).Decode(&header) != nil || header.Type != "session" {
+		return ""
+	}
+	return header.CWD
+}
+
 // FindSessionByID matches a session by exact UUID, prefix, or direct file path.
 func FindSessionByID(query string) (*SessionInfo, error) {
 	// 1. Direct file path check
@@ -273,6 +321,12 @@ func FindSessionByID(query string) (*SessionInfo, error) {
 		if err == nil {
 			base := filepath.Base(abs)
 			id := strings.TrimSuffix(base, filepath.Ext(base))
+			agent := DetectAgentFromPath(abs)
+			if agent == "pi" {
+				if idx := strings.Index(id, "_"); idx >= 0 && idx+1 < len(id) {
+					id = id[idx+1:]
+				}
+			}
 			shortID := id
 			if len(shortID) > 8 {
 				shortID = shortID[:8]
@@ -283,7 +337,7 @@ func FindSessionByID(query string) (*SessionInfo, error) {
 				Title:   extractSessionTitle(abs),
 				Path:    abs,
 				ModTime: stat.ModTime(),
-				Agent:   DetectAgentFromPath(abs),
+				Agent:   agent,
 			}, nil
 		}
 	}

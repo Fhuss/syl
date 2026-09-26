@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -117,6 +118,9 @@ func getCmuxCurrentSurface() string {
 
 // findCmuxPeer parses `cmux list-panels` to locate the adjacent terminal panel.
 func findCmuxPeer() (string, bool) {
+	if os.Getenv("CMUX_SURFACE_ID") == "" {
+		return "", false
+	}
 	if _, err := exec.LookPath("cmux"); err != nil {
 		return "", false
 	}
@@ -180,6 +184,41 @@ func ParseCmuxPanels(output string, currentSurface string) (string, bool) {
 		return fallbackPeer, true
 	}
 	return "", false
+}
+
+// ParseCmuxResumeSession returns the transcript of a Pi session bound to a cmux
+// surface. Other restore records (including arbitrary shell commands) are not
+// conversation transcripts.
+func ParseCmuxResumeSession(data []byte) string {
+	var record struct {
+		Cleared       bool `json:"cleared"`
+		RestoreRecord struct {
+			Kind         string `json:"kind"`
+			CheckpointID string `json:"checkpoint_id"`
+		} `json:"restore_record"`
+	}
+	if json.Unmarshal(data, &record) != nil || record.Cleared || record.RestoreRecord.Kind != "pi" {
+		return ""
+	}
+	path := record.RestoreRecord.CheckpointID
+	if !filepath.IsAbs(path) || filepath.Ext(path) != ".jsonl" {
+		return ""
+	}
+	return path
+}
+
+// PeerSessionFile finds the exact session bound to the adjacent Pi surface,
+// when cmux has recorded a restore checkpoint for that surface.
+func PeerSessionFile() string {
+	peer, ok := findCmuxPeer()
+	if !ok {
+		return ""
+	}
+	out, err := exec.Command("cmux", "surface", "resume", "show", "--surface", peer, "--json").Output()
+	if err != nil {
+		return ""
+	}
+	return ParseCmuxResumeSession(out)
 }
 
 // findTmuxPeer locates the peer pane in the current tmux window.
@@ -325,4 +364,3 @@ func DetectPeerAgent() string {
 
 	return ""
 }
-
