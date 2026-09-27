@@ -104,6 +104,7 @@ If the user asks about Syl keyboard shortcuts while chatting:
 * **`C` / `y`**: Copy full markdown card.
 * **`s`**: Send card context into chat surface (`[Ref: ...]`).
 * **`p`**: Pin card to prevent deletion.
-* **`x`**: Drop / delete card.
+* **`x`**: Drop a card (not permanent deletion; last 10 drops are retained).
+* **`U`**: Undo the most recent drop, including after a restart.
 * **`?`**: Help glossary modal.
 

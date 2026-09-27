@@ -51,10 +51,19 @@ type Card struct {
 	UpdatedAt time.Time     `json:"updated_at"`
 }
 
+const maxUndoDrops = 10
+
+// RemovedCard retains a dropped card and its list position for undo.
+type RemovedCard struct {
+	Card  *Card `json:"card"`
+	Index int   `json:"index"`
+}
+
 type Store struct {
 	mu      sync.RWMutex
 	cards   map[string]*Card
 	order   []string // preserve insertion order
+	removed []RemovedCard
 	counter int
 }
 
@@ -202,24 +211,74 @@ func (s *Store) UpdateTitle(id, newTitle string) bool {
 	return true
 }
 
-// Remove deletes a card from the store.
+func copyCard(c *Card) *Card {
+	clone := *c
+	clone.History = append([]CardVersion(nil), c.History...)
+	return &clone
+}
+
+// Remove hides a card and retains the last ten drops for persistent undo.
 func (s *Store) Remove(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.cards[id]; !exists {
+	c, exists := s.cards[id]
+	if !exists {
 		return false
 	}
-	delete(s.cards, id)
-
-	newOrder := make([]string, 0, len(s.order)-1)
-	for _, oid := range s.order {
-		if oid != id {
-			newOrder = append(newOrder, oid)
+	for idx, oid := range s.order {
+		if oid == id {
+			s.removed = append(s.removed, RemovedCard{Card: copyCard(c), Index: idx})
+			if len(s.removed) > maxUndoDrops {
+				s.removed = append([]RemovedCard(nil), s.removed[len(s.removed)-maxUndoDrops:]...)
+			}
+			s.order = append(s.order[:idx], s.order[idx+1:]...)
+			delete(s.cards, id)
+			return true
 		}
 	}
-	s.order = newOrder
-	return true
+	return false
+}
+
+// CanUndoDrop reports whether the current session has a dropped card to restore.
+func (s *Store) CanUndoDrop() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.removed) > 0
+}
+
+// UndoDrop restores the most recently dropped card, including edits and pin state.
+func (s *Store) UndoDrop() (*Card, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.removed) == 0 {
+		return nil, false
+	}
+	last := len(s.removed) - 1
+	record := s.removed[last]
+	s.removed = s.removed[:last]
+	restored := copyCard(record.Card)
+	if _, exists := s.cards[restored.ID]; exists {
+		originalID := restored.ID
+		for suffix := 1; ; suffix++ {
+			restored.ID = fmt.Sprintf("%s-restored-%d", originalID, suffix)
+			if _, exists := s.cards[restored.ID]; !exists {
+				break
+			}
+		}
+	}
+	idx := record.Index
+	if idx > len(s.order) {
+		idx = len(s.order)
+	}
+	s.order = append(s.order, "")
+	copy(s.order[idx+1:], s.order[idx:])
+	s.order[idx] = restored.ID
+	s.cards[restored.ID] = restored
+	if restored.Number > s.counter {
+		s.counter = restored.Number
+	}
+	return restored, true
 }
 
 // Get retrieves a card by ID.
@@ -310,10 +369,12 @@ func (s *Store) ExportMarkdown(sessionLabel string) string {
 
 // SessionSnapshot represents a complete serialized dump of the session cards and progress.
 type SessionSnapshot struct {
-	SessionID         string    `json:"session_id"`
-	LastTurnProcessed int       `json:"last_turn_processed"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	Cards             []*Card   `json:"cards"`
+	SessionID         string        `json:"session_id"`
+	LastTurnProcessed int           `json:"last_turn_processed"`
+	UpdatedAt         time.Time     `json:"updated_at"`
+	Cards             []*Card       `json:"cards"`
+	UndoDrops         []RemovedCard `json:"undo_drops,omitempty"`
+	CardCounter       int           `json:"card_counter,omitempty"`
 }
 
 // SessionFilePath returns the default path ~/.config/syl/sessions/<sessionID>.json, or respects SYL_CONFIG_DIR if set.
@@ -364,6 +425,8 @@ func (s *Store) SaveSnapshot(filePath string, sessionID string, lastTurnProcesse
 		LastTurnProcessed: lastTurnProcessed,
 		UpdatedAt:         time.Now(),
 		Cards:             cards,
+		UndoDrops:         s.removed,
+		CardCounter:       s.counter,
 	}
 
 	data, err := json.MarshalIndent(snap, "", "  ")
@@ -397,13 +460,27 @@ func (s *Store) LoadSnapshot(filePath string) (*SessionSnapshot, error) {
 		}
 		seen[c.ID] = true
 	}
+	if len(snap.UndoDrops) > maxUndoDrops || snap.CardCounter < 0 {
+		return nil, fmt.Errorf("invalid undo history in session snapshot")
+	}
+	for _, removed := range snap.UndoDrops {
+		if removed.Card == nil || removed.Card.ID == "" || removed.Index < 0 {
+			return nil, fmt.Errorf("invalid dropped card in session snapshot")
+		}
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.cards = make(map[string]*Card)
 	s.order = make([]string, 0, len(snap.Cards))
-	maxNumber := 0
+	s.removed = append([]RemovedCard(nil), snap.UndoDrops...)
+	maxNumber := snap.CardCounter
+	for _, removed := range s.removed {
+		if removed.Card.Number > maxNumber {
+			maxNumber = removed.Card.Number
+		}
+	}
 
 	for _, c := range snap.Cards {
 		s.cards[c.ID] = c

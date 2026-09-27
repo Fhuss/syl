@@ -323,6 +323,44 @@ func TestEditorTempFilesAreUniqueAndPrivate(t *testing.T) {
 	}
 }
 
+func TestUndoDropAfterRestartRestoresEditedCard(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "edited", Title: "Important", Content: "original"})
+	store.Update("edited", "edited in editor", "Editor change")
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "undo-restart")
+	m.width, m.height = 100, 30
+	m.actionDrop()
+	if !strings.Contains(m.toast, "U to undo") || len(store.List()) != 0 || !store.CanUndoDrop() {
+		t.Fatalf("drop should offer undo: %q", m.toast)
+	}
+	foundButton := false
+	for _, badge := range m.getActionBarBadges() {
+		if badge.action == "undo_drop" {
+			foundButton = true
+		}
+	}
+	if !foundButton {
+		t.Fatal("action bar must offer Undo after a drop")
+	}
+	restarted := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "undo-restart")
+	if !restarted.store.CanUndoDrop() || len(restarted.store.List()) != 0 {
+		t.Fatal("undo history did not survive restart")
+	}
+	restarted.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'U'}})
+	cards := restarted.store.List()
+	if len(cards) != 1 || cards[0].ID != "edited" || cards[0].Content != "edited in editor" || cards[0].Version != 2 || restarted.store.CanUndoDrop() {
+		t.Fatalf("undo did not restore edited card: %+v", cards)
+	}
+	if !strings.Contains(restarted.toast, "Restored card") {
+		t.Fatalf("undo success was not shown: %q", restarted.toast)
+	}
+	again := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "undo-restart")
+	if len(again.store.List()) != 1 || again.store.CanUndoDrop() {
+		t.Fatal("restored card not persisted after undo")
+	}
+}
+
 func TestModelDropAndPin(t *testing.T) {
 	store := card.NewStore()
 	c1 := store.Add(&card.Card{
