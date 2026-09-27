@@ -22,7 +22,7 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
 4. **Two-Way Terminal Bridge (`s`)** — Injects card references (`[Ref: Title (vN)] `) or isolated commands directly into your adjacent chat terminal or multiplexer pane (`cmux`, `tmux`) with automatic clipboard backup.
 5. **Smart Reconciler & Companion Skill** — Recognizes `[Ref: ...]` headers and smoothly appends elaborations and patched steps without losing original context. Paired with the `syl-companion` agent skill for maximum conversational symbiosis.
 6. **Zero-Config Auto-Detection** — Automatically resolves the active session and host agent harness (`agy`, `claude`, `pi`, `heuristic`).
-7. **Session Persistence** — Cards, titles, pinned state, revision history, and the last 10 dropped cards are saved privately and atomically to `~/.config/syl/sessions/<session-id>.json` and restored on restart. Dropping is not secure erasure: the retained cards can be restored with `U` until evicted by later drops. If a snapshot is unreadable, Syl pauses capture and leaves the file untouched; back it up and repair or restore it before restarting.
+7. **Session Persistence** — Cards, titles, pinned state, revision history, and the last 10 dropped cards are saved privately and atomically to `~/.config/syl/sessions/<session-id>.json` and restored on restart. Dropping is not secure erasure: retained cards can be restored with `U` or browsed in Trash (`T`). A confirmed Trash purge removes a card from the current snapshot, but older backups and filesystem history may still contain copies. If a snapshot is unreadable, Syl pauses capture and leaves the file untouched; back it up and repair or restore it before restarting.
 
 ---
 
@@ -218,8 +218,9 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 | `p` | Pin / unpin card |
 | `x` / `d` | Drop a card from the reference pane |
 | `U` | Undo the most recent drop (up to 10, including after restart) |
+| `T` | Browse dropped cards; restore a selected card with `Enter` or purge it with `x` then `y` |
 | `e` | Export all session cards to `./syl-reference.md` |
-| `h` | Toggle revision history for selected card |
+| `h` | Preview prior card content; `←`/`→` select revisions and `Enter` restores the selected content as a new version (title/pin stay unchanged) |
 | `s` | Send card reference or block to peer terminal (`cmux`, `tmux`, clipboard) |
 | `?` / `F1` | Toggle help glossary modal |
 | `q` / `Ctrl+C` | Quit (saves session snapshot; `q` stays open if saving fails, `Ctrl+C` force-quits) |
