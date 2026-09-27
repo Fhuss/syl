@@ -223,7 +223,10 @@ Keys in TUI:
 	}
 
 	transcriptPath := ""
-	sessionLabel := "demo"
+	sessionLabel := ""
+	if isDemo {
+		sessionLabel = "demo"
+	}
 	var detectedAgent string
 	if !isDemo {
 		transcriptPath = fileFlag
@@ -256,6 +259,15 @@ Keys in TUI:
 				transcriptPath = session.Path
 				sessionLabel = session.ShortID
 				detectedAgent = session.Agent
+			}
+		}
+
+		if transcriptPath != "" && sessionLabel == "" {
+			var err error
+			sessionLabel, err = fileSessionLabel(transcriptPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid transcript path: %v\n", err)
+				os.Exit(1)
 			}
 		}
 

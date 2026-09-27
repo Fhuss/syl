@@ -81,6 +81,43 @@ func TestReconciliationQueuesTurnsInOrder(t *testing.T) {
 	}
 }
 
+func TestSnapshotFailureIsVisibleAndRecoverable(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "saved-card", Content: "important"})
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "snapshot-failure")
+	m.width, m.height = 100, 30
+	m.updateViewportSize()
+	validPath := m.sessionFilePath
+	m.sessionFilePath = t.TempDir() // Renaming a file onto a directory must fail.
+	m.actionPin()
+	if m.saveError == "" || !strings.Contains(m.toast, "Save failed") || strings.Contains(m.toast, "Pinned card") {
+		t.Fatalf("save failure was hidden: badge=%q toast=%q", m.saveError, m.toast)
+	}
+	if !strings.Contains(m.View(), "SAVE FAILED") {
+		t.Fatal("save failure must remain visible in the status badge")
+	}
+	m.Update(ClearToastMsg{})
+	if m.toast != m.saveError {
+		t.Fatal("toast timer cleared persistent save warning")
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd != nil {
+		t.Fatal("q must not discard unsaved edits")
+	}
+	m.actionSwitchSession(watcher.SessionInfo{ShortID: "another-session"})
+	if m.sessionLabel != "snapshot-failure" || len(m.store.List()) != 1 {
+		t.Fatal("session switch discarded unsaved cards")
+	}
+	m.sessionFilePath = validPath
+	if err := m.saveSessionState(); err != nil || m.saveError != "" {
+		t.Fatalf("save did not recover: %v, %q", err, m.saveError)
+	}
+	loaded := card.NewStore()
+	if _, err := loaded.LoadSnapshot(validPath); err != nil || len(loaded.List()) != 1 || !loaded.List()[0].Pinned {
+		t.Fatalf("recovered snapshot missing pin: cards=%+v err=%v", loaded.List(), err)
+	}
+}
+
 func TestReconcileFailureBlocksLaterCheckpointsUntilRetry(t *testing.T) {
 	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "failed-turn-test")
 	defer m.StopWatching()
