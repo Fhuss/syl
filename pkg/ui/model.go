@@ -782,7 +782,7 @@ func (m *Model) actionDrop() tea.Cmd {
 		c := cards[m.selectedIndex]
 		m.store.Remove(c.ID)
 		if err := m.saveSessionState(); err == nil {
-			m.toast = fmt.Sprintf("✓ Dropped card #%d", c.Number)
+			m.toast = fmt.Sprintf("Dropped card #%d · U to undo", c.Number)
 		}
 		newCards := m.store.List()
 		if len(newCards) == 0 {
@@ -796,6 +796,29 @@ func (m *Model) actionDrop() tea.Cmd {
 		})
 	}
 	return nil
+}
+
+func (m *Model) actionUndoDrop() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
+	c, ok := m.store.UndoDrop()
+	if !ok {
+		m.toast = "No dropped card to undo"
+	} else {
+		for idx, candidate := range m.store.List() {
+			if candidate.ID == c.ID {
+				m.selectedIndex = idx
+				break
+			}
+		}
+		m.updateViewportContent()
+		if err := m.saveSessionState(); err == nil {
+			m.toast = fmt.Sprintf("Restored card #%d: %s", c.Number, c.Title)
+		}
+	}
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return ClearToastMsg{} })
 }
 
 func (m *Model) saveSessionState() error {
@@ -1404,7 +1427,8 @@ func (m *Model) buildHelpModal() string {
 	b.WriteString(renderBadgeRow("R", BadgeKeyWarning, "Retry Capture", "Retry a failed card turn before later turns are processed") + "\n")
 	b.WriteString(renderBadgeRow("p", BadgeKeyWarning, "Pin Card", "Pin / unpin card (protect from pruning)") + "\n")
 	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
-	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop / delete card from reference pane") + "\n")
+	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop card (last 10 drops remain recoverable)") + "\n")
+	b.WriteString(renderBadgeRow("U", BadgeKeyWarning, "Undo Drop", "Restore most recently dropped card, even after restart") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -1601,6 +1625,8 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		return m.actionPin()
 	case "drop":
 		return m.actionDrop()
+	case "undo_drop":
+		return m.actionUndoDrop()
 	case "export":
 		return m.actionExport()
 	case "history":
@@ -2001,6 +2027,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "x", "d":
 				m.showHelp = false
 				return m, m.actionDrop()
+			case "U":
+				m.showHelp = false
+				return m, m.actionUndoDrop()
 			case "h":
 				m.showHelp = false
 				m.actionToggleHistory()
@@ -2329,6 +2358,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "R":
 			return m, m.retryFailedTurn()
 
+		case "U":
+			return m, m.actionUndoDrop()
+
 		case "c":
 			return m, m.actionCopy()
 
@@ -2535,13 +2567,21 @@ func (m *Model) getActionBarBadges() []actionBadge {
 		style:        BtnStyle,
 	})
 
-	// 11. Drop (x)
+	// 11. Drop (x), then offer undo while a dropped card exists.
 	badges = append(badges, actionBadge{
 		labelCompact: "x Drop",
 		labelFull:    "🗑 Drop (x)",
 		action:       "drop",
 		style:        BtnStyle,
 	})
+	if m.store.CanUndoDrop() {
+		badges = append(badges, actionBadge{
+			labelCompact: "U Undo",
+			labelFull:    "↶ Undo Drop (U)",
+			action:       "undo_drop",
+			style:        BtnHoverStyle,
+		})
+	}
 
 	// 12. Help / Command Palette (?)
 	helpStyle := BtnStyle

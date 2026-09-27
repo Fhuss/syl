@@ -1,6 +1,7 @@
 package card
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,6 +88,72 @@ func TestStoreRemove(t *testing.T) {
 	}
 	if list[0].ID != "c2" {
 		t.Fatalf("expected c2 remaining, got %s", list[0].ID)
+	}
+}
+
+func TestUndoDropRestoresContentHistoryPinAndOrder(t *testing.T) {
+	s := NewStore()
+	s.Add(&Card{ID: "a", Title: "A"})
+	b := s.Add(&Card{ID: "b", Title: "B", Content: "draft"})
+	s.Add(&Card{ID: "c", Title: "C"})
+	s.Update("b", "edited", "Editor change")
+	s.TogglePin("b")
+	if !s.Remove("b") || !s.CanUndoDrop() {
+		t.Fatal("drop should retain undo state")
+	}
+	b.Content = "changed by a stale pointer"
+	restored, ok := s.UndoDrop()
+	if !ok || restored.ID != "b" || restored.Content != "edited" || restored.Version != 2 || !restored.Pinned || len(restored.History) != 2 {
+		t.Fatalf("undo lost card state: %+v, %v", restored, ok)
+	}
+	if len(s.order) != 3 || s.order[0] != "a" || s.order[1] != "b" || s.order[2] != "c" || s.CanUndoDrop() {
+		t.Fatalf("undo did not restore original order: %+v", s.order)
+	}
+	if _, ok := s.UndoDrop(); ok {
+		t.Fatal("second undo must not remove anything")
+	}
+}
+
+func TestUndoDropAvoidsReusedCardID(t *testing.T) {
+	s := NewStore()
+	s.Add(&Card{ID: "card-1", Content: "old"})
+	s.Remove("card-1")
+	s.Add(&Card{ID: "card-1", Content: "new"})
+	c, ok := s.UndoDrop()
+	if !ok || c.ID != "card-1-restored-1" || c.Content != "old" || len(s.List()) != 2 {
+		t.Fatalf("restoring reused ID failed: %+v, %v", c, ok)
+	}
+}
+
+func TestUndoDropPersistsAcrossRestartAndIsBounded(t *testing.T) {
+	s := NewStore()
+	for i := 1; i <= maxUndoDrops+1; i++ {
+		id := fmt.Sprintf("card-%d", i)
+		s.Add(&Card{ID: id, Title: id})
+		if !s.Remove(id) {
+			t.Fatalf("drop %s failed", id)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "session.json")
+	if err := s.SaveSnapshot(path, "undo-session", 7); err != nil {
+		t.Fatal(err)
+	}
+	loaded := NewStore()
+	if _, err := loaded.LoadSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+	for i := maxUndoDrops + 1; i > 1; i-- {
+		c, ok := loaded.UndoDrop()
+		if !ok || c.ID != fmt.Sprintf("card-%d", i) || c.Number != i {
+			t.Fatalf("undo #%d failed: %+v, %v", i, c, ok)
+		}
+	}
+	if loaded.CanUndoDrop() {
+		t.Fatal("oldest drop should be evicted from bounded history")
+	}
+	newCard := loaded.Add(&Card{ID: "after-restart"})
+	if newCard.Number != maxUndoDrops+2 {
+		t.Fatalf("number counter did not survive restart: %d", newCard.Number)
 	}
 }
 
@@ -206,6 +273,7 @@ func TestLoadSnapshotRejectsIncompleteDataWithoutChangingStore(t *testing.T) {
 		`{"session_id":"test"}`,
 		`{"session_id":"test","cards":[null]}`,
 		`{"session_id":"test","cards":[{"id":"duplicate"},{"id":"duplicate"}]}`,
+		`{"session_id":"test","cards":[],"undo_drops":[{"card":null,"index":0}]}`,
 	} {
 		t.Run(data, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "snapshot.json")
