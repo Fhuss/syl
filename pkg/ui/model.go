@@ -114,6 +114,8 @@ type Model struct {
 	saveError         string
 	loadError         error
 	selectedIndex     int
+	historyIndex      int
+	historyCardID     string
 	viewMode          ViewMode
 	isDemo            bool
 	demoStep          int
@@ -149,6 +151,11 @@ type Model struct {
 	showSessionSwitcher bool
 	sessionList         []watcher.SessionInfo
 	selectedSessionIdx  int
+
+	// Recoverable drops / selected trash purge.
+	showTrash         bool
+	selectedTrashIdx  int
+	confirmTrashPurge bool
 
 	// Vim Enhancements
 	activePane     PaneType
@@ -447,14 +454,27 @@ func (m *Model) updateViewportContentPreserve(preserveOffset bool) {
 	selected := cards[m.selectedIndex]
 	var finalContent string
 	if m.viewMode == ModeHistory {
-		var b strings.Builder
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Revision History: " + selected.Title + "\n\n"))
-		for _, h := range selected.History {
-			entry := fmt.Sprintf("• Version %d [%s]:\n  Reason: %s\n\n",
-				h.Version, h.UpdatedAt.Format("15:04:05"), h.Reason)
-			b.WriteString(lipgloss.NewStyle().Foreground(ColorPrimary).Render(entry))
+		if m.historyCardID != selected.ID {
+			m.historyCardID = selected.ID
+			m.historyIndex = len(selected.History) - 1
 		}
-		finalContent = b.String()
+		if len(selected.History) == 0 {
+			finalContent = "No revision history available."
+		} else {
+			if m.historyIndex < 0 || m.historyIndex >= len(selected.History) {
+				m.historyIndex = len(selected.History) - 1
+			}
+			revision := selected.History[m.historyIndex]
+			header := fmt.Sprintf("Revision History: %s · entry %d/%d · v%d\n%s — %s\n\n",
+				selected.Title, m.historyIndex+1, len(selected.History), revision.Version,
+				revision.UpdatedAt.Format("2006-01-02 15:04"), revision.Reason)
+			content, err := m.renderer.Render(revision.Content)
+			if err != nil {
+				content = revision.Content
+			}
+			finalContent = lipgloss.NewStyle().Bold(true).Render(header) + content
+		}
+
 	} else if m.showRaw {
 		rawContent := selected.Content
 		if m.isFolded {
@@ -747,11 +767,44 @@ func (m *Model) actionPin() tea.Cmd {
 func (m *Model) actionToggleHistory() {
 	if m.viewMode == ModeHistory {
 		m.viewMode = ModeSplit
+		m.historyCardID = ""
 	} else {
 		m.viewMode = ModeHistory
+		cards := m.store.List()
+		if m.selectedIndex < len(cards) {
+			m.historyCardID = cards[m.selectedIndex].ID
+			m.historyIndex = len(cards[m.selectedIndex].History) - 1
+		}
 	}
 	m.updateViewportSize()
 	m.updateViewportContent()
+}
+
+func (m *Model) actionRestoreHistoryRevision() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
+	cards := m.store.List()
+	if m.selectedIndex >= len(cards) || m.historyIndex < 0 || m.historyIndex >= len(cards[m.selectedIndex].History) {
+		return nil
+	}
+	c := cards[m.selectedIndex]
+	if m.historyIndex == len(c.History)-1 {
+		m.toast = "This is already the current revision"
+		return nil
+	}
+	previousVersion := c.History[m.historyIndex].Version
+	restored, ok := m.store.RestoreRevision(c.ID, m.historyIndex)
+	if !ok {
+		return nil
+	}
+	m.historyIndex = len(restored.History) - 1
+	m.updateViewportContent()
+	if err := m.saveSessionState(); err == nil {
+		m.toast = fmt.Sprintf("Restored content from v%d as v%d", previousVersion, restored.Version)
+	}
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return ClearToastMsg{} })
 }
 
 func (m *Model) actionSend() tea.Cmd {
@@ -798,15 +851,31 @@ func (m *Model) actionDrop() tea.Cmd {
 	return nil
 }
 
+func (m *Model) actionOpenTrash() {
+	if !m.store.CanUndoDrop() {
+		m.toast = "No dropped cards in trash"
+		return
+	}
+	m.showTrash = true
+	m.confirmTrashPurge = false
+	m.selectedTrashIdx = 0
+}
+
 func (m *Model) actionUndoDrop() tea.Cmd {
+	return m.actionRestoreDropped(0)
+}
+
+func (m *Model) actionRestoreDropped(index int) tea.Cmd {
 	if m.loadError != nil {
 		m.toast = snapshotLoadWarning(m.loadError)
 		return nil
 	}
-	c, ok := m.store.UndoDrop()
+	c, ok := m.store.RestoreDropped(index)
 	if !ok {
-		m.toast = "No dropped card to undo"
+		m.toast = "No dropped card to restore"
 	} else {
+		m.showTrash = false
+		m.confirmTrashPurge = false
 		for idx, candidate := range m.store.List() {
 			if candidate.ID == c.ID {
 				m.selectedIndex = idx
@@ -819,6 +888,27 @@ func (m *Model) actionUndoDrop() tea.Cmd {
 		}
 	}
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg { return ClearToastMsg{} })
+}
+
+func (m *Model) actionPurgeDropped(index int) tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
+	c, ok := m.store.PurgeDropped(index)
+	if !ok {
+		return nil
+	}
+	m.confirmTrashPurge = false
+	if remaining := len(m.store.DroppedCards()); remaining == 0 {
+		m.showTrash = false
+	} else if m.selectedTrashIdx >= remaining {
+		m.selectedTrashIdx = remaining - 1
+	}
+	if err := m.saveSessionState(); err == nil {
+		m.toast = fmt.Sprintf("Purged card #%d from Syl trash (backups may retain it)", c.Number)
+	}
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return ClearToastMsg{} })
 }
 
 func (m *Model) saveSessionState() error {
@@ -1149,6 +1239,8 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.sessionLabel = sess.ShortID
 	m.store = nextStore
 	m.selectedIndex = 0
+	m.historyIndex = 0
+	m.historyCardID = ""
 	m.lastTurnProcessed = lastTurn
 	m.pendingTurns = nil
 	m.failedTurn = nil
@@ -1156,6 +1248,9 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.reconciling = false
 	m.isAgentBusy = false
 	m.showSessionSwitcher = false
+	m.showTrash = false
+	m.confirmTrashPurge = false
+	m.selectedTrashIdx = 0
 
 	harnessChoice := "auto"
 	switch strings.ToLower(sess.Agent) {
@@ -1350,6 +1445,36 @@ func (m *Model) buildSessionSwitcherModal() string {
 	return modalBox
 }
 
+func (m *Model) buildTrashModal() string {
+	boxWidth := 72
+	if m.width > 20 && m.width < boxWidth+4 {
+		boxWidth = m.width - 4
+	}
+	var b strings.Builder
+	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("DROPPED CARDS") + "\n\n")
+	drops := m.store.DroppedCards()
+	for idx, c := range drops {
+		line := fmt.Sprintf("  #%d  %s (v%d)", c.Number, c.Title, c.Version)
+		if idx == m.selectedTrashIdx {
+			line = "❯" + line[1:]
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render(line) + "\n")
+		} else {
+			b.WriteString(line + "\n")
+		}
+	}
+	b.WriteString("\n")
+	if m.confirmTrashPurge && m.selectedTrashIdx < len(drops) {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render(
+			fmt.Sprintf("Purge #%d from Syl trash? [y] Confirm  [n/Esc] Cancel", drops[m.selectedTrashIdx].Number)) + "\n")
+		b.WriteString("Backups and filesystem history may still contain copies.")
+	} else {
+		b.WriteString("[j/k] Select • [Enter] Restore • [x] Purge • [Esc] Close")
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorWarning).Background(lipgloss.Color("#1E222A")).
+		Padding(1, 2).Width(boxWidth).Render(b.String())
+}
+
 func (m *Model) buildHelpModal() string {
 	boxWidth := 76
 	if m.width > 20 && m.width < 80 {
@@ -1414,7 +1539,7 @@ func (m *Model) buildHelpModal() string {
 	b.WriteString(renderBadgeRow("w", BadgeKeySecondary, "Switch Pane", "Switch focus between card list and preview buffer") + "\n")
 	b.WriteString(renderBadgeRow("za", BadgeKeySecondary, "Fold Code", "Collapse or expand fenced code blocks in card") + "\n")
 	b.WriteString(renderBadgeRow("r", BadgeKeySecondary, "Raw / Rendered", "Toggle Raw text mode (for clean mouse select)") + "\n")
-	b.WriteString(renderBadgeRow("h", BadgeKeySecondary, "Version Diff", "Toggle card version revision history") + "\n")
+	b.WriteString(renderBadgeRow("h", BadgeKeySecondary, "Version History", "Preview prior content with ←/→; Enter restores as new version") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -1429,6 +1554,7 @@ func (m *Model) buildHelpModal() string {
 	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
 	b.WriteString(renderBadgeRow("x / d", BadgeKeyWarning, "Drop Card", "Drop card (last 10 drops remain recoverable)") + "\n")
 	b.WriteString(renderBadgeRow("U", BadgeKeyWarning, "Undo Drop", "Restore most recently dropped card, even after restart") + "\n")
+	b.WriteString(renderBadgeRow("T", BadgeKeyWarning, "Trash", "Browse dropped cards; restore or confirm purge") + "\n")
 	if !compact {
 		b.WriteString("\n")
 	}
@@ -1627,6 +1753,8 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		return m.actionDrop()
 	case "undo_drop":
 		return m.actionUndoDrop()
+	case "trash":
+		m.actionOpenTrash()
 	case "export":
 		return m.actionExport()
 	case "history":
@@ -1898,6 +2026,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionPress {
+			if m.showTrash {
+				m.showTrash = false
+				m.confirmTrashPurge = false
+				return m, nil
+			}
 			if m.showHelp {
 				m.showHelp = false
 				return m, nil
@@ -2030,6 +2163,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "U":
 				m.showHelp = false
 				return m, m.actionUndoDrop()
+			case "T":
+				m.showHelp = false
+				m.actionOpenTrash()
+				return m, nil
 			case "h":
 				m.showHelp = false
 				m.actionToggleHistory()
@@ -2130,6 +2267,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if m.showTrash {
+			if m.confirmTrashPurge {
+				switch msg.String() {
+				case "y":
+					return m, m.actionPurgeDropped(m.selectedTrashIdx)
+				case "n", "esc":
+					m.confirmTrashPurge = false
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "q", "T":
+				m.showTrash = false
+			case "up", "k":
+				if m.selectedTrashIdx > 0 {
+					m.selectedTrashIdx--
+				}
+			case "down", "j":
+				if m.selectedTrashIdx < len(m.store.DroppedCards())-1 {
+					m.selectedTrashIdx++
+				}
+			case "enter":
+				return m, m.actionRestoreDropped(m.selectedTrashIdx)
+			case "x", "d":
+				m.confirmTrashPurge = true
+			}
+			return m, nil
+		}
+
 		if m.searchMode {
 			switch msg.String() {
 			case "esc":
@@ -2161,6 +2327,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		if m.viewMode == ModeHistory {
+			switch msg.String() {
+			case "h", "esc", "q":
+				m.actionToggleHistory()
+				return m, nil
+			case "left", "[":
+				if m.historyIndex > 0 {
+					m.historyIndex--
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "right", "]":
+				cards := m.store.List()
+				if m.selectedIndex < len(cards) && m.historyIndex < len(cards[m.selectedIndex].History)-1 {
+					m.historyIndex++
+					m.updateViewportContent()
+				}
+				return m, nil
+			case "up", "k":
+				m.viewport.LineUp(1)
+				return m, nil
+			case "down", "j":
+				m.viewport.LineDown(1)
+				return m, nil
+			case "enter":
+				return m, m.actionRestoreHistoryRevision()
+			default:
+				if msg.String() != "ctrl+c" {
+					return m, nil
+				}
+			}
 		}
 
 		switch msg.String() {
@@ -2360,6 +2559,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "U":
 			return m, m.actionUndoDrop()
+
+		case "T":
+			m.actionOpenTrash()
+			return m, nil
 
 		case "c":
 			return m, m.actionCopy()
@@ -2580,6 +2783,11 @@ func (m *Model) getActionBarBadges() []actionBadge {
 			labelFull:    "↶ Undo Drop (U)",
 			action:       "undo_drop",
 			style:        BtnHoverStyle,
+		}, actionBadge{
+			labelCompact: "T Trash",
+			labelFull:    "🗑 Trash (T)",
+			action:       "trash",
+			style:        BtnStyle,
 		})
 	}
 
@@ -2796,6 +3004,8 @@ func (m *Model) renderBaseView() string {
 	if m.searchMode {
 		matches := m.countSearchMatches()
 		hintText = fmt.Sprintf("🔍 Search cards: %s_  [%d matches]  (Enter: Keep • Esc: Cancel • ↑/↓: Next/Prev)", m.searchQuery, matches)
+	} else if m.viewMode == ModeHistory {
+		hintText = "💡 ←/→: Prior/Next Revision • ↑/↓: Scroll • Enter: Restore Content as New Version • h/Esc: Close"
 	} else if m.width < 90 {
 		if m.viewMode == ModeDetail {
 			hintText = "💡 Tab: Show • b: Steps • s: Send • c: Copy • /: Search • ?: Palette • q: Quit"
@@ -2824,6 +3034,9 @@ func (m *Model) View() string {
 	}
 	if m.showSessionSwitcher {
 		return m.overlayModalOnBlurredBackdrop(base, m.buildSessionSwitcherModal())
+	}
+	if m.showTrash {
+		return m.overlayModalOnBlurredBackdrop(base, m.buildTrashModal())
 	}
 	return base
 }

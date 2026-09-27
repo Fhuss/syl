@@ -163,6 +163,29 @@ func (s *Store) Update(id, newContent, reason string) (*Card, bool) {
 	return c, true
 }
 
+// RestoreRevision copies an older content revision into a new version. The
+// original history remains intact so the restoration itself can be reversed.
+func (s *Store) RestoreRevision(id string, historyIndex int) (*Card, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, exists := s.cards[id]
+	if !exists || historyIndex < 0 || historyIndex >= len(c.History)-1 {
+		return nil, false
+	}
+	previous := c.History[historyIndex]
+	c.Version++
+	c.Content = previous.Content
+	c.Status = StatusRevised
+	c.UpdatedAt = time.Now()
+	c.History = append(c.History, CardVersion{
+		Version:   c.Version,
+		Content:   c.Content,
+		Reason:    fmt.Sprintf("Restored content from v%d", previous.Version),
+		UpdatedAt: c.UpdatedAt,
+	})
+	return c, true
+}
+
 // Invalidate marks a card as disproven or superseded.
 func (s *Store) Invalidate(id, reason string) (*Card, bool) {
 	s.mu.Lock()
@@ -247,16 +270,32 @@ func (s *Store) CanUndoDrop() bool {
 	return len(s.removed) > 0
 }
 
+// DroppedCards returns the undo history newest first, without exposing store pointers.
+func (s *Store) DroppedCards() []*Card {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cards := make([]*Card, 0, len(s.removed))
+	for i := len(s.removed) - 1; i >= 0; i-- {
+		cards = append(cards, copyCard(s.removed[i].Card))
+	}
+	return cards
+}
+
 // UndoDrop restores the most recently dropped card, including edits and pin state.
 func (s *Store) UndoDrop() (*Card, bool) {
+	return s.RestoreDropped(0)
+}
+
+// RestoreDropped restores the selected card by newest-first undo history index.
+func (s *Store) RestoreDropped(index int) (*Card, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.removed) == 0 {
+	if index < 0 || index >= len(s.removed) {
 		return nil, false
 	}
-	last := len(s.removed) - 1
-	record := s.removed[last]
-	s.removed = s.removed[:last]
+	position := len(s.removed) - 1 - index
+	record := s.removed[position]
+	s.removed = append(s.removed[:position], s.removed[position+1:]...)
 	restored := copyCard(record.Card)
 	if _, exists := s.cards[restored.ID]; exists {
 		originalID := restored.ID
@@ -279,6 +318,20 @@ func (s *Store) UndoDrop() (*Card, bool) {
 		s.counter = restored.Number
 	}
 	return restored, true
+}
+
+// PurgeDropped removes one selected card from the current undo history. It
+// cannot erase older filesystem snapshots or user-created backups.
+func (s *Store) PurgeDropped(index int) (*Card, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if index < 0 || index >= len(s.removed) {
+		return nil, false
+	}
+	position := len(s.removed) - 1 - index
+	c := copyCard(s.removed[position].Card)
+	s.removed = append(s.removed[:position], s.removed[position+1:]...)
+	return c, true
 }
 
 // Get retrieves a card by ID.

@@ -50,6 +50,39 @@ func TestStoreAddAndUpdate(t *testing.T) {
 	}
 }
 
+func TestRestoreRevisionPreservesHistoryAndPersists(t *testing.T) {
+	s := NewStore()
+	s.Add(&Card{ID: "revision", Title: "Keep title", Content: "original"})
+	s.Update("revision", "mistake", "User edit")
+	s.Update("revision", "another mistake", "AI update")
+	s.TogglePin("revision")
+	if _, ok := s.RestoreRevision("revision", 3); ok {
+		t.Fatal("out-of-range revision was accepted")
+	}
+	if _, ok := s.RestoreRevision("revision", 2); ok {
+		t.Fatal("current revision should not create a duplicate")
+	}
+	restored, ok := s.RestoreRevision("revision", 0)
+	if !ok || restored.Version != 4 || restored.Content != "original" || restored.Title != "Keep title" || !restored.Pinned {
+		t.Fatalf("restore did not keep card identity and metadata: %+v, %v", restored, ok)
+	}
+	if len(restored.History) != 4 || restored.History[1].Content != "mistake" || restored.History[3].Reason != "Restored content from v1" {
+		t.Fatalf("restore destroyed history: %+v", restored.History)
+	}
+	path := filepath.Join(t.TempDir(), "revision.json")
+	if err := s.SaveSnapshot(path, "revision-session", 2); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewStore()
+	if _, err := reloaded.LoadSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+	c, ok := reloaded.Get("revision")
+	if !ok || c.Content != "original" || c.Version != 4 || len(c.History) != 4 {
+		t.Fatalf("restored revision did not survive restart: %+v, %v", c, ok)
+	}
+}
+
 func TestStorePinning(t *testing.T) {
 	s := NewStore()
 	c1 := &Card{ID: "c1", Title: "First"}
@@ -122,6 +155,49 @@ func TestUndoDropAvoidsReusedCardID(t *testing.T) {
 	c, ok := s.UndoDrop()
 	if !ok || c.ID != "card-1-restored-1" || c.Content != "old" || len(s.List()) != 2 {
 		t.Fatalf("restoring reused ID failed: %+v, %v", c, ok)
+	}
+}
+
+func TestPurgeSelectedDropWithoutDiscardingOtherUndoHistory(t *testing.T) {
+	s := NewStore()
+	for _, id := range []string{"one", "two", "three"} {
+		s.Add(&Card{ID: id, Title: id})
+		s.Remove(id)
+	}
+	drops := s.DroppedCards()
+	if len(drops) != 3 || drops[0].ID != "three" || drops[1].ID != "two" || drops[2].ID != "one" {
+		t.Fatalf("trash order incorrect: %+v", drops)
+	}
+	drops[0].Title = "caller mutation"
+	if s.DroppedCards()[0].Title != "three" {
+		t.Fatal("trash exposed mutable store pointers")
+	}
+	if _, ok := s.PurgeDropped(-1); ok {
+		t.Fatal("negative purge index accepted")
+	}
+	purged, ok := s.PurgeDropped(1)
+	if !ok || purged.ID != "two" {
+		t.Fatalf("wrong card purged: %+v, %v", purged, ok)
+	}
+	path := filepath.Join(t.TempDir(), "session.json")
+	if err := s.SaveSnapshot(path, "purge-session", 3); err != nil {
+		t.Fatal(err)
+	}
+	loaded := NewStore()
+	if _, err := loaded.LoadSnapshot(path); err != nil {
+		t.Fatal(err)
+	}
+	if cards := loaded.DroppedCards(); len(cards) != 2 || cards[0].ID != "three" || cards[1].ID != "one" {
+		t.Fatalf("purge did not persist: %+v", cards)
+	}
+	if c, ok := loaded.RestoreDropped(1); !ok || c.ID != "one" {
+		t.Fatalf("selective restore failed: %+v, %v", c, ok)
+	}
+	if c, ok := loaded.UndoDrop(); !ok || c.ID != "three" {
+		t.Fatalf("most recent undo failed: %+v, %v", c, ok)
+	}
+	if loaded.CanUndoDrop() {
+		t.Fatal("purged card came back into undo history")
 	}
 }
 

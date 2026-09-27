@@ -106,5 +106,7 @@ If the user asks about Syl keyboard shortcuts while chatting:
 * **`p`**: Pin card to prevent deletion.
 * **`x`**: Drop a card (not permanent deletion; last 10 drops are retained).
 * **`U`**: Undo the most recent drop, including after a restart.
+* **`T`**: Browse Trash; select with `j`/`k`, restore with `Enter`, or purge from the current snapshot with `x` then `y` (backups may retain copies).
+* **`h`**: Preview earlier card content with `←`/`→` and restore selected content as a new version with `Enter`.
 * **`?`**: Help glossary modal.
 

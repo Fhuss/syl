@@ -63,8 +63,9 @@ Keys in TUI:
   [p]          Pin / unpin card
   [x / d]      Drop a card from the reference pane
   [U]          Undo the most recent drop (up to 10, even after restart)
+  [T]          Browse Trash; Enter restores, x then y purges selected drop
   [e]          Export session cards to markdown (./syl-reference.md)
-  [h]          Toggle version revision history
+  [h]          Preview prior content; Left/Right and Enter restore as a new version
   [s]          Send card context to chat surface (cmux / clipboard)
   [?]          Toggle help glossary modal
   [Space]      Advance turn (in demo mode)

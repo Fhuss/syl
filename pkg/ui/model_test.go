@@ -13,6 +13,7 @@ import (
 	"github.com/Fhuss/syl/pkg/reconciler"
 	"github.com/Fhuss/syl/pkg/watcher"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMain(m *testing.M) {
@@ -320,6 +321,103 @@ func TestEditorTempFilesAreUniqueAndPrivate(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("editor file must be private: %v, err=%v", info, err)
 		}
+	}
+}
+
+func TestHistoryPreviewAndRestoreContent(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "history-card", Title: "Original title", Content: "first content"})
+	store.Update("history-card", "second content", "User edit")
+	store.Update("history-card", "third content", "AI revision")
+	store.Add(&card.Card{ID: "other-history", Content: "other first"})
+	store.Update("other-history", "other latest", "Other edit")
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "history-restore")
+	m.width, m.height = 100, 30
+	m.updateViewportSize()
+	m.actionToggleHistory()
+	if m.historyIndex != 2 || !strings.Contains(ansi.Strip(m.currentContent), "third content") {
+		t.Fatalf("history should open on latest content: index=%d content=%q", m.historyIndex, m.currentContent)
+	}
+	for _, want := range []string{"second content", "first content"} {
+		m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		if !strings.Contains(ansi.Strip(m.currentContent), want) {
+			t.Fatalf("did not preview older content %q: %q", want, m.currentContent)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	c, _ := store.Get("history-card")
+	if c.Content != "first content" || c.Version != 4 || len(c.History) != 4 || m.historyIndex != 3 {
+		t.Fatalf("history restoration failed: %+v index=%d", c, m.historyIndex)
+	}
+	if !strings.Contains(m.toast, "Restored content from v1 as v4") {
+		t.Fatalf("no restore confirmation: %q", m.toast)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if c.Version != 4 {
+		t.Fatal("restoring current version should not create duplicate history")
+	}
+	m.selectedIndex = 1 // Switching cards while viewing history starts on its latest revision.
+	m.updateViewportContent()
+	if m.historyIndex != 1 || !strings.Contains(ansi.Strip(m.currentContent), "other latest") {
+		t.Fatalf("history selection leaked across cards: index=%d content=%q", m.historyIndex, m.currentContent)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m.viewMode != ModeSplit {
+		t.Fatal("h should close version preview")
+	}
+	reloaded := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "history-restore")
+	restored, ok := reloaded.store.Get("history-card")
+	if !ok || restored.Version != 4 || restored.Content != "first content" {
+		t.Fatalf("restored version not persisted: %+v", restored)
+	}
+}
+
+func TestTrashSelectionPurgeConfirmationAndRestore(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	store := card.NewStore()
+	for _, id := range []string{"one", "two", "three"} {
+		store.Add(&card.Card{ID: id, Title: id})
+		store.Remove(id)
+	}
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "trash-picker")
+	m.width, m.height = 100, 30
+	if err := m.saveSessionState(); err != nil {
+		t.Fatal(err)
+	}
+	key := func(s string) { m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}) }
+	key("T")
+	if !m.showTrash || !strings.Contains(m.View(), "DROPPED CARDS") {
+		t.Fatal("trash should open with dropped cards")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyDown}) // Select 'two', not the newest 'three'.
+	if m.selectedTrashIdx != 1 {
+		t.Fatalf("trash navigation failed: %d", m.selectedTrashIdx)
+	}
+	key("x")
+	if !m.confirmTrashPurge || len(store.DroppedCards()) != 3 {
+		t.Fatal("purge must require confirmation")
+	}
+	key("n")
+	if m.confirmTrashPurge || len(store.DroppedCards()) != 3 {
+		t.Fatal("cancel should leave trash unchanged")
+	}
+	key("x")
+	key("y")
+	drops := store.DroppedCards()
+	if len(drops) != 2 || drops[0].ID != "three" || drops[1].ID != "one" || m.confirmTrashPurge {
+		t.Fatalf("selected purge failed: %+v", drops)
+	}
+	if !strings.Contains(m.toast, "backups may retain") {
+		t.Fatalf("purge confirmation omitted backup warning: %q", m.toast)
+	}
+	reloaded := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "trash-picker")
+	if drops := reloaded.store.DroppedCards(); len(drops) != 2 || drops[0].ID != "three" || drops[1].ID != "one" {
+		t.Fatalf("purge was not persisted: %+v", drops)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Restore selected 'one'.
+	if m.showTrash || len(store.List()) != 1 || store.List()[0].ID != "one" {
+		t.Fatalf("selective restore failed: %+v", store.List())
 	}
 }
 
