@@ -22,7 +22,7 @@ If a later answer corrected step 3 or changed a configuration parameter, you mus
 4. **Two-Way Terminal Bridge (`s`)** — Injects card references (`[Ref: Title (vN)] `) or isolated commands directly into your adjacent chat terminal or multiplexer pane (`cmux`, `tmux`) with automatic clipboard backup.
 5. **Smart Reconciler & Companion Skill** — Recognizes `[Ref: ...]` headers and smoothly appends elaborations and patched steps without losing original context. Paired with the `syl-companion` agent skill for maximum conversational symbiosis.
 6. **Zero-Config Auto-Detection** — Automatically resolves the active session and host agent harness (`agy`, `claude`, `pi`, `heuristic`).
-7. **Session Persistence** — Cards, titles, pinned state, and revision history are saved privately and atomically to `~/.config/syl/sessions/<session-id>.json` on every change and restored on restart.
+7. **Session Persistence** — Cards, titles, pinned state, and revision history are saved privately and atomically to `~/.config/syl/sessions/<session-id>.json` on every change and restored on restart. If a snapshot is unreadable, Syl pauses capture and leaves the file untouched; back it up and repair or restore it before restarting.
 
 ---
 
