@@ -25,6 +25,122 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestUnreadableSnapshotCannotBeOverwritten(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	path, err := card.SessionFilePath("unreadable-start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"session_id":"unreadable-start","cards":[{"id":"important","content":"recoverable"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "unreadable-start")
+	if m.loadError == nil || !strings.Contains(m.toast, "Snapshot unreadable") {
+		t.Fatal("failed snapshot load must be visible")
+	}
+	m.width, m.height = 100, 30
+	if !strings.Contains(m.View(), "SNAPSHOT UNREADABLE") {
+		t.Fatal("status must show an unreadable snapshot warning")
+	}
+	transcript := filepath.Join(t.TempDir(), "turns.jsonl")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.StartWatching(transcript)
+	if m.turnCh != nil {
+		t.Fatal("watcher must not process turns with a corrupt snapshot")
+	}
+	m.Update(MutationsAppliedMsg{Turn: &watcher.Turn{ID: 1}, Mutations: []reconciler.Mutation{{Op: reconciler.OpAdd, CardID: "new", Content: "new"}}})
+	if len(m.store.List()) != 0 || m.lastTurnProcessed != 0 {
+		t.Fatal("corrupt snapshot must not accept mutations")
+	}
+	if err := m.saveSessionState(); err == nil {
+		t.Fatal("corrupt snapshot should block saving")
+	}
+	m.Update(ClearToastMsg{})
+	if !strings.Contains(m.toast, "Original preserved") {
+		t.Fatal("load failure warning should remain visible")
+	}
+	if current, err := os.ReadFile(path); err != nil || string(current) != string(original) {
+		t.Fatalf("corrupt snapshot was changed: %q, %v", current, err)
+	}
+	_, quit := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quit == nil {
+		t.Fatal("q should allow quitting an unreadable, unmodified session")
+	}
+}
+
+func TestUnreadableSnapshotBlocksPrepopulatedStoreAndSwitch(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	path, err := card.SessionFilePath("unreadable-prepopulated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"session_id":"unreadable-prepopulated","cards":[null]}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "caller-card", Content: "caller"})
+	m := NewModel(store, reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "unreadable-prepopulated")
+	if m.loadError == nil || m.saveSessionState() == nil {
+		t.Fatal("caller-supplied cards must not overwrite corrupt snapshot")
+	}
+	m.actionDrop()
+	if len(store.List()) != 1 {
+		t.Fatal("mutating actions must be blocked on corrupt snapshot")
+	}
+	_, quit := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if quit != nil {
+		t.Fatal("q must not discard caller-supplied unsaved cards")
+	}
+	currentPath := filepath.Join(t.TempDir(), "current.jsonl")
+	if err := os.WriteFile(currentPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.actionSwitchSession(watcher.SessionInfo{ShortID: "healthy", Path: currentPath})
+	if m.sessionLabel != "unreadable-prepopulated" || len(m.store.List()) != 1 {
+		t.Fatal("switching discarded caller-supplied unsaved cards")
+	}
+	if current, err := os.ReadFile(path); err != nil || string(current) != string(original) {
+		t.Fatalf("corrupt snapshot was overwritten: %q, %v", current, err)
+	}
+}
+
+func TestSwitchAwayFromUnreadableSnapshot(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	path, err := card.SessionFilePath("bad-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"session_id":"bad-target","cards":[null]}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(card.NewStore(), reconciler.NewHeuristicReconciler(), nil, nil, nil, false, "bad-target")
+	if m.loadError == nil {
+		t.Fatal("expected unreadable initial snapshot")
+	}
+	transcript := filepath.Join(t.TempDir(), "current.jsonl")
+	if err := os.WriteFile(transcript, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.actionSwitchSession(watcher.SessionInfo{ShortID: "healthy", Path: transcript})
+	defer m.StopWatching()
+	if m.loadError != nil || m.sessionLabel != "healthy" {
+		t.Fatal("could not switch to a healthy session")
+	}
+	m.store.Add(&card.Card{ID: "healthy-card", Content: "keep"})
+	m.actionSwitchSession(watcher.SessionInfo{ShortID: "bad-target", Path: transcript})
+	if m.sessionLabel != "healthy" || len(m.store.List()) != 1 || m.store.List()[0].ID != "healthy-card" {
+		t.Fatal("switching to a corrupt snapshot discarded the healthy session")
+	}
+	if current, err := os.ReadFile(path); err != nil || string(current) != string(original) {
+		t.Fatalf("corrupt snapshot was overwritten: %q, %v", current, err)
+	}
+}
+
 func TestSwitchSessionIgnoresOldWatcherEvents(t *testing.T) {
 	oldPath := filepath.Join(t.TempDir(), "old.jsonl")
 	newPath := filepath.Join(t.TempDir(), "new.jsonl")

@@ -200,6 +200,30 @@ func TestSessionFilePathTightensExistingDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadSnapshotRejectsIncompleteDataWithoutChangingStore(t *testing.T) {
+	for _, data := range []string{
+		`null`,
+		`{"session_id":"test"}`,
+		`{"session_id":"test","cards":[null]}`,
+		`{"session_id":"test","cards":[{"id":"duplicate"},{"id":"duplicate"}]}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "snapshot.json")
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := NewStore()
+			store.Add(&Card{ID: "keep", Content: "existing"})
+			if _, err := store.LoadSnapshot(path); err == nil {
+				t.Fatal("incomplete snapshot was accepted")
+			}
+			if cards := store.List(); len(cards) != 1 || cards[0].ID != "keep" {
+				t.Fatalf("load failure changed existing cards: %+v", cards)
+			}
+		})
+	}
+}
+
 func TestStoreSnapshotPersistence(t *testing.T) {
 	tmpFile := "./test-session-snap.json"
 	_ = os.Remove(tmpFile)

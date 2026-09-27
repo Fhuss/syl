@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,6 +112,7 @@ type Model struct {
 	failedTurn        *watcher.Turn
 	reconcileAttempts int
 	saveError         string
+	loadError         error
 	selectedIndex     int
 	viewMode          ViewMode
 	isDemo            bool
@@ -158,6 +160,10 @@ type Model struct {
 	currentContent string
 }
 
+func snapshotLoadWarning(err error) string {
+	return fmt.Sprintf("Snapshot unreadable: %v. Original preserved; quit and repair it.", err)
+}
+
 func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, turnCh chan *watcher.Turn, activityCh chan watcher.AgentActivity, isDemo bool, sessionLabel string) *Model {
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -172,13 +178,20 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 
 	var lastTurn int
 	var sessionFilePath, saveError string
+	var loadError error
 	if !isDemo && sessionLabel != "" {
 		if path, err := card.SessionFilePath(sessionLabel); err == nil {
 			sessionFilePath = path
-			if len(store.List()) == 0 {
-				if snap, err := store.LoadSnapshot(path); err == nil {
+			loadInto := store
+			if len(store.List()) > 0 {
+				loadInto = card.NewStore() // Validate without replacing caller-supplied cards.
+			}
+			if snap, err := loadInto.LoadSnapshot(path); err == nil {
+				if loadInto == store {
 					lastTurn = snap.LastTurnProcessed
 				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				loadError = fmt.Errorf("%s: %w", path, err)
 			}
 		} else {
 			saveError = fmt.Sprintf("Save failed: %v", err)
@@ -211,8 +224,12 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 		sessionFilePath:   sessionFilePath,
 		lastTurnProcessed: lastTurn,
 		saveError:         saveError,
+		loadError:         loadError,
 		toast:             saveError,
 		spinner:           sp,
+	}
+	if loadError != nil {
+		m.toast = snapshotLoadWarning(loadError)
 	}
 
 	if len(store.List()) > 0 {
@@ -251,6 +268,9 @@ func (m *Model) StopWatching() {
 // cancel the previous file tail instead of mixing two conversations.
 func (m *Model) StartWatching(path string) {
 	m.StopWatching()
+	if m.loadError != nil {
+		return // Never process turns from an unreadable snapshot.
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.watchCtx, m.watchCancel = ctx, cancel
 	m.generation++
@@ -556,6 +576,10 @@ func (m *Model) actionToggleFold() {
 }
 
 func (m *Model) actionToggleChecklist() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
 	cards := m.store.List()
 	if len(cards) == 0 || m.selectedIndex >= len(cards) {
 		return nil
@@ -577,6 +601,10 @@ func (m *Model) actionToggleChecklist() tea.Cmd {
 }
 
 func (m *Model) actionOpenInEditor() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
 	cards := m.store.List()
 	if len(cards) == 0 || m.selectedIndex >= len(cards) {
 		m.toast = "No card selected"
@@ -686,6 +714,10 @@ func (m *Model) actionCopyAll() tea.Cmd {
 }
 
 func (m *Model) actionPin() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		selectedID := cards[m.selectedIndex].ID
@@ -741,6 +773,10 @@ func (m *Model) actionSend() tea.Cmd {
 }
 
 func (m *Model) actionDrop() tea.Cmd {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return nil
+	}
 	cards := m.store.List()
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
@@ -763,6 +799,10 @@ func (m *Model) actionDrop() tea.Cmd {
 }
 
 func (m *Model) saveSessionState() error {
+	if m.loadError != nil {
+		m.toast = snapshotLoadWarning(m.loadError)
+		return m.loadError // Never overwrite an unreadable snapshot.
+	}
 	if m.isDemo || m.sessionLabel == "" {
 		return nil
 	}
@@ -1058,31 +1098,41 @@ func (m *Model) countSearchMatches() int {
 }
 
 func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
-	if err := m.saveSessionState(); err != nil {
-		return nil // Keep unsaved cards in this session until storage recovers.
+	if m.loadError != nil && len(m.store.List()) > 0 {
+		m.toast = "Snapshot unreadable; cannot switch away from unsaved cards"
+		return nil
+	}
+	if m.loadError == nil {
+		if err := m.saveSessionState(); err != nil {
+			return nil // Keep unsaved cards in this session until storage recovers.
+		}
 	}
 	path, err := card.SessionFilePath(sess.ShortID)
 	if err != nil {
-		m.saveError = fmt.Sprintf("Save failed: %v", err)
-		m.toast = m.saveError
+		m.toast = fmt.Sprintf("Could not open session: %v", err)
 		return nil
 	}
+	nextStore := card.NewStore()
+	var lastTurn int
+	if snap, err := nextStore.LoadSnapshot(path); err == nil {
+		lastTurn = snap.LastTurnProcessed
+	} else if !errors.Is(err, os.ErrNotExist) {
+		m.toast = snapshotLoadWarning(fmt.Errorf("%s: %w", path, err))
+		return nil // Keep the current session and target snapshot untouched.
+	}
+	m.loadError = nil
 	m.saveError = ""
 	m.sessionFilePath = path
 	m.sessionLabel = sess.ShortID
-	m.store = card.NewStore()
+	m.store = nextStore
 	m.selectedIndex = 0
-	m.lastTurnProcessed = 0
+	m.lastTurnProcessed = lastTurn
 	m.pendingTurns = nil
 	m.failedTurn = nil
 	m.reconcileAttempts = 0
 	m.reconciling = false
 	m.isAgentBusy = false
 	m.showSessionSwitcher = false
-
-	if snap, err := m.store.LoadSnapshot(path); err == nil {
-		m.lastTurnProcessed = snap.LastTurnProcessed
-	}
 
 	harnessChoice := "auto"
 	switch strings.ToLower(sess.Agent) {
@@ -1587,8 +1637,14 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		}
 		m.toast = "Demo finished! All turns demonstrated."
 	case "quit":
-		if err := m.saveSessionState(); err != nil {
+		if m.loadError != nil && len(m.store.List()) > 0 {
+			m.toast = "Snapshot unreadable; export unsaved cards before quitting"
 			return nil
+		}
+		if m.loadError == nil {
+			if err := m.saveSessionState(); err != nil {
+				return nil
+			}
 		}
 		m.StopWatching()
 		return tea.Quit
@@ -1609,7 +1665,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EditorFinishedMsg:
 		defer os.Remove(msg.TempFile)
-		if msg.Generation != m.generation {
+		if msg.Generation != m.generation || m.loadError != nil {
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -1657,7 +1713,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenForActivity()
 
 	case TurnReceivedMsg:
-		if msg.Generation != m.generation {
+		if msg.Generation != m.generation || m.loadError != nil {
 			return m, nil
 		}
 		m.isAgentBusy = false
@@ -1686,7 +1742,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.applyReconcile(msg.Turn), m.listenForTurns())
 
 	case MutationsAppliedMsg:
-		if msg.Generation != m.generation {
+		if msg.Generation != m.generation || m.loadError != nil {
 			return m, nil
 		}
 		m.failedTurn = nil
@@ -1764,7 +1820,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case TitleSummarizedMsg:
-		if msg.Generation != m.generation {
+		if msg.Generation != m.generation || m.loadError != nil {
 			return m, nil
 		}
 		if m.store.UpdateTitle(msg.CardID, msg.Title) {
@@ -1807,7 +1863,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.retryFailedTurn()
 
 	case ClearToastMsg:
-		m.toast = m.saveError // Keep the cause visible until a save succeeds.
+		m.toast = m.saveError // Keep persistence errors visible.
+		if m.loadError != nil {
+			m.toast = snapshotLoadWarning(m.loadError)
+		}
 		return m, nil
 
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
@@ -2077,8 +2136,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
-			if err := m.saveSessionState(); err != nil && msg.String() == "q" {
-				return m, nil // Ctrl+C is still an explicit unsaved exit.
+			if m.loadError != nil && len(m.store.List()) > 0 && msg.String() == "q" {
+				m.toast = "Snapshot unreadable; export unsaved cards before quitting"
+				return m, nil
+			}
+			if m.loadError == nil {
+				if err := m.saveSessionState(); err != nil && msg.String() == "q" {
+					return m, nil // Ctrl+C is still an explicit unsaved exit.
+				}
 			}
 			m.StopWatching()
 			return m, tea.Quit
@@ -2605,7 +2670,13 @@ func (m *Model) renderBaseView() string {
 
 	// 1. Header
 	var statusBadge string
-	if m.saveError != "" {
+	if m.loadError != nil {
+		label := "SNAPSHOT UNREADABLE · QUIT & REPAIR"
+		if len(cards) > 0 {
+			label = "SNAPSHOT UNREADABLE · EXPORT UNSAVED CARDS"
+		}
+		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render(label)
+	} else if m.saveError != "" {
 		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("SAVE FAILED · Q TO RETRY")
 	} else if m.failedTurn != nil && !m.reconciling {
 		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("CAPTURE PAUSED · R TO RETRY")

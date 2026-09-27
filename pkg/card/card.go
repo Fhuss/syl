@@ -385,6 +385,18 @@ func (s *Store) LoadSnapshot(filePath string) (*SessionSnapshot, error) {
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
 	}
+	// A syntactically valid partial snapshot must not replace the current
+	// store (or be silently rewritten as an empty snapshot on the next turn).
+	if snap.SessionID == "" || snap.Cards == nil || snap.LastTurnProcessed < 0 {
+		return nil, fmt.Errorf("incomplete session snapshot")
+	}
+	seen := make(map[string]bool, len(snap.Cards))
+	for _, c := range snap.Cards {
+		if c == nil || c.ID == "" || seen[c.ID] {
+			return nil, fmt.Errorf("invalid or duplicate card in session snapshot")
+		}
+		seen[c.ID] = true
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
