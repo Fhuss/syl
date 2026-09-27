@@ -159,7 +159,7 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	fsWatcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -277,6 +277,40 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 		}
 	}
 
+	// Reopen after atomic replacement, or rewind after an in-place truncate.
+	// Replaying the new file from the beginning preserves turn IDs, allowing
+	// the UI's persisted checkpoint to discard previously seen turns.
+	refreshFile := func() {
+		current, err := file.Stat()
+		if err != nil {
+			return
+		}
+		latest, err := os.Stat(w.path)
+		if err != nil { // The path may briefly disappear during rotation.
+			return
+		}
+		if !os.SameFile(current, latest) {
+			next, err := os.Open(w.path)
+			if err != nil {
+				return
+			}
+			_ = fsWatcher.Remove(w.path) // Old inode may already have lost its watch.
+			_ = fsWatcher.Add(w.path)    // Polling still works if a watch cannot be added.
+			_ = file.Close()
+			file = next
+			reader = bufio.NewReader(file)
+			partialLine, pendingUser = "", ""
+			turnCount = 0
+		} else if position, err := file.Seek(0, io.SeekCurrent); err == nil && latest.Size() < position {
+			if _, err := file.Seek(0, io.SeekStart); err != nil {
+				return
+			}
+			reader.Reset(file)
+			partialLine, pendingUser = "", ""
+			turnCount = 0
+		}
+	}
+
 	// Initial catch-up on existing content
 	processAvailableLines()
 	isCatchingUp = false
@@ -300,11 +334,13 @@ func (w *FileWatcher) Watch(ctx context.Context, turnCh chan<- *Turn, activityCh
 			if !ok {
 				return nil
 			}
-			if event.Has(fsnotify.Write) {
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Remove) {
+				refreshFile()
 				processAvailableLines()
 			}
 		case <-ticker.C:
-			// Fallback poll in case fsnotify misses an append
+			// Also recover if the path was replaced and the old watch went away.
+			refreshFile()
 			processAvailableLines()
 		case err, ok := <-fsWatcher.Errors:
 			if !ok {

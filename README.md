@@ -153,7 +153,7 @@ syl --harness claude     # Force Claude Code
 syl --harness pi         # Force Pi Agent
 syl --harness heuristic  # Fast offline fallback (no AI calls)
 
-# Point at a specific transcript file
+# Point at a specific transcript file (persisted separately per file path)
 syl --file /path/to/transcript.jsonl
 
 # Attach to a specific session by ID or prefix (overrides auto-detection)
@@ -221,7 +221,7 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 | `h` | Toggle revision history for selected card |
 | `s` | Send card reference or block to peer terminal (`cmux`, `tmux`, clipboard) |
 | `?` / `F1` | Toggle help glossary modal |
-| `q` / `Ctrl+C` | Quit (saves session snapshot to disk) |
+| `q` / `Ctrl+C` | Quit (saves session snapshot; `q` stays open if saving fails, `Ctrl+C` force-quits) |
 
 ---
 

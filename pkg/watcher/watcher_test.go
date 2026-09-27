@@ -4,9 +4,69 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestFileWatcherResumesAfterReplacementAndTruncate(t *testing.T) {
+	for _, mode := range []string{"replace", "truncate"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "transcript.jsonl")
+			first := []byte(`{"type":"user","content":"first"}` + "\n" +
+				`{"type":"assistant","content":"` + strings.Repeat("x", 1024) + `"}` + "\n")
+			second := []byte(`{"type":"user","content":"second"}` + "\n" +
+				`{"type":"assistant","content":"second answer"}` + "\n")
+			if err := os.WriteFile(path, first, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			turns := make(chan *Turn, 8)
+			go func() { _ = NewFileWatcher(path).Watch(ctx, turns, nil) }()
+			awaitTurn := func(want string) *Turn {
+				t.Helper()
+				deadline := time.After(3 * time.Second)
+				for {
+					select {
+					case turn := <-turns:
+						if turn.User == want {
+							return turn
+						}
+					case <-deadline:
+						t.Fatalf("timed out waiting for %q after %s", want, mode)
+					}
+				}
+			}
+			if firstTurn := awaitTurn("first"); firstTurn.ID != 1 {
+				t.Fatalf("initial turn ID = %d", firstTurn.ID)
+			}
+			full := append(append([]byte{}, first...), second...)
+			if mode == "replace" {
+				tmp := filepath.Join(filepath.Dir(path), "new.jsonl")
+				if err := os.WriteFile(tmp, full, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(tmp, path); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.Truncate(path, 0); err != nil {
+					t.Fatal(err)
+				}
+				// Let the watcher observe the shorter file before rewriting it
+				// beyond the prior offset.
+				time.Sleep(650 * time.Millisecond)
+				if err := os.WriteFile(path, full, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if next := awaitTurn("second"); next.ID != 2 || next.Assistant != "second answer" {
+				t.Fatalf("rewritten transcript produced %+v", next)
+			}
+		})
+	}
+}
 
 func TestFileWatcher(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -101,4 +161,3 @@ func TestFileWatcherPartialLineChunk(t *testing.T) {
 		t.Fatalf("timed out waiting for turn event after partial chunk write")
 	}
 }
-

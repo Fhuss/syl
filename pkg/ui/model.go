@@ -110,6 +110,7 @@ type Model struct {
 	pendingTurns      []*watcher.Turn
 	failedTurn        *watcher.Turn
 	reconcileAttempts int
+	saveError         string
 	selectedIndex     int
 	viewMode          ViewMode
 	isDemo            bool
@@ -170,7 +171,7 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 	sp.Style = lipgloss.NewStyle().Foreground(ColorWarning)
 
 	var lastTurn int
-	var sessionFilePath string
+	var sessionFilePath, saveError string
 	if !isDemo && sessionLabel != "" {
 		if path, err := card.SessionFilePath(sessionLabel); err == nil {
 			sessionFilePath = path
@@ -179,6 +180,8 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 					lastTurn = snap.LastTurnProcessed
 				}
 			}
+		} else {
+			saveError = fmt.Sprintf("Save failed: %v", err)
 		}
 	}
 
@@ -207,6 +210,8 @@ func NewModel(store *card.Store, rec reconciler.Reconciler, h harness.Harness, t
 		sessionLabel:      sessionLabel,
 		sessionFilePath:   sessionFilePath,
 		lastTurnProcessed: lastTurn,
+		saveError:         saveError,
+		toast:             saveError,
 		spinner:           sp,
 	}
 
@@ -561,9 +566,10 @@ func (m *Model) actionToggleChecklist() tea.Cmd {
 		m.toast = "No checklist items (- [ ]) in card"
 	} else {
 		m.store.Update(c.ID, newContent, "Task toggled")
-		m.saveSessionState()
+		if err := m.saveSessionState(); err == nil {
+			m.toast = "✓ " + toastMsg
+		}
 		m.updateViewportContentPreserve(true)
-		m.toast = "✓ " + toastMsg
 	}
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return ClearToastMsg{}
@@ -684,11 +690,12 @@ func (m *Model) actionPin() tea.Cmd {
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		selectedID := cards[m.selectedIndex].ID
 		pinned := m.store.TogglePin(selectedID)
-		m.saveSessionState()
-		if pinned {
-			m.toast = "📌 Pinned card"
-		} else {
-			m.toast = "Unpinned card"
+		if err := m.saveSessionState(); err == nil {
+			if pinned {
+				m.toast = "📌 Pinned card"
+			} else {
+				m.toast = "Unpinned card"
+			}
 		}
 		newCards := m.store.List()
 		for idx, c := range newCards {
@@ -738,8 +745,9 @@ func (m *Model) actionDrop() tea.Cmd {
 	if len(cards) > 0 && m.selectedIndex < len(cards) {
 		c := cards[m.selectedIndex]
 		m.store.Remove(c.ID)
-		m.saveSessionState()
-		m.toast = fmt.Sprintf("✓ Dropped card #%d", c.Number)
+		if err := m.saveSessionState(); err == nil {
+			m.toast = fmt.Sprintf("✓ Dropped card #%d", c.Number)
+		}
 		newCards := m.store.List()
 		if len(newCards) == 0 {
 			m.selectedIndex = 0
@@ -754,11 +762,26 @@ func (m *Model) actionDrop() tea.Cmd {
 	return nil
 }
 
-func (m *Model) saveSessionState() {
-	if m.isDemo || m.sessionFilePath == "" {
-		return
+func (m *Model) saveSessionState() error {
+	if m.isDemo || m.sessionLabel == "" {
+		return nil
 	}
-	_ = m.store.SaveSnapshot(m.sessionFilePath, m.sessionLabel, m.lastTurnProcessed)
+	var err error
+	if m.sessionFilePath == "" {
+		err = fmt.Errorf("session snapshot path is unavailable")
+	} else {
+		err = m.store.SaveSnapshot(m.sessionFilePath, m.sessionLabel, m.lastTurnProcessed)
+	}
+	if err != nil {
+		m.saveError = fmt.Sprintf("Save failed: %v", err)
+		m.toast = m.saveError
+		return err
+	}
+	if m.toast == m.saveError {
+		m.toast = ""
+	}
+	m.saveError = ""
+	return nil
 }
 
 func (m *Model) actionExport() tea.Cmd {
@@ -1035,7 +1058,17 @@ func (m *Model) countSearchMatches() int {
 }
 
 func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
-	m.saveSessionState()
+	if err := m.saveSessionState(); err != nil {
+		return nil // Keep unsaved cards in this session until storage recovers.
+	}
+	path, err := card.SessionFilePath(sess.ShortID)
+	if err != nil {
+		m.saveError = fmt.Sprintf("Save failed: %v", err)
+		m.toast = m.saveError
+		return nil
+	}
+	m.saveError = ""
+	m.sessionFilePath = path
 	m.sessionLabel = sess.ShortID
 	m.store = card.NewStore()
 	m.selectedIndex = 0
@@ -1047,11 +1080,8 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.isAgentBusy = false
 	m.showSessionSwitcher = false
 
-	if path, err := card.SessionFilePath(sess.ShortID); err == nil {
-		m.sessionFilePath = path
-		if snap, err := m.store.LoadSnapshot(path); err == nil {
-			m.lastTurnProcessed = snap.LastTurnProcessed
-		}
+	if snap, err := m.store.LoadSnapshot(path); err == nil {
+		m.lastTurnProcessed = snap.LastTurnProcessed
 	}
 
 	harnessChoice := "auto"
@@ -1557,7 +1587,9 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		}
 		m.toast = "Demo finished! All turns demonstrated."
 	case "quit":
-		m.saveSessionState()
+		if err := m.saveSessionState(); err != nil {
+			return nil
+		}
 		m.StopWatching()
 		return tea.Quit
 	}
@@ -1587,9 +1619,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if c, ok := m.store.Get(msg.CardID); ok {
 				if strings.TrimSpace(newContent) != strings.TrimSpace(c.Content) && strings.TrimSpace(newContent) != "" {
 					m.store.Update(c.ID, newContent, "Edited in editor")
-					m.saveSessionState()
+					if err := m.saveSessionState(); err == nil {
+						m.toast = "✓ Card updated from editor"
+					}
 					m.updateViewportContentPreserve(true)
-					m.toast = "✓ Card updated from editor"
 				} else {
 					m.toast = "No changes made in editor"
 				}
@@ -1774,7 +1807,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.retryFailedTurn()
 
 	case ClearToastMsg:
-		m.toast = ""
+		m.toast = m.saveError // Keep the cause visible until a save succeeds.
 		return m, nil
 
 	// Mouse Event Handling (Clicks, Scroll wheel, Drag)
@@ -2044,7 +2077,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
-			m.saveSessionState()
+			if err := m.saveSessionState(); err != nil && msg.String() == "q" {
+				return m, nil // Ctrl+C is still an explicit unsaved exit.
+			}
 			m.StopWatching()
 			return m, tea.Quit
 
@@ -2570,7 +2605,9 @@ func (m *Model) renderBaseView() string {
 
 	// 1. Header
 	var statusBadge string
-	if m.failedTurn != nil && !m.reconciling {
+	if m.saveError != "" {
+		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("SAVE FAILED · Q TO RETRY")
+	} else if m.failedTurn != nil && !m.reconciling {
 		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("CAPTURE PAUSED · R TO RETRY")
 	} else if m.isAgentBusy {
 		toolName := m.agentTool
