@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -144,3 +146,23 @@ var (
 			Background(lipgloss.Color("#4C566A")).
 			Padding(0, 1)
 )
+
+// DimANSI applies ECMA-48 / ANSI faint mode (SGR 2) line-by-line to reduce contrast
+// and brightness of unfocused split panes without altering text layout or dimensions.
+func DimANSI(s string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		// In ANSI, \x1b[0m clears all attributes including faint.
+		// Replace \x1b[0m with \x1b[0m\x1b[2m so that faint styling persists across color resets.
+		dimmed := strings.ReplaceAll(l, "\x1b[0m", "\x1b[0m\x1b[2m")
+		lines[i] = "\x1b[2m" + dimmed + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+

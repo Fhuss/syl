@@ -3441,5 +3441,16 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 	rightStyle := lipgloss.NewStyle().
 		Padding(0, 1)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftStyle.Render(leftPane), rightStyle.Render(m.viewport.View()))
+	renderedLeft := leftStyle.Render(leftPane)
+	renderedRight := rightStyle.Render(m.viewport.View())
+
+	if m.viewMode == ModeSplit {
+		if m.activePane == PaneCards {
+			renderedRight = DimANSI(renderedRight)
+		} else if m.activePane == PanePreview {
+			renderedLeft = DimANSI(renderedLeft)
+		}
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, renderedLeft, renderedRight)
 }

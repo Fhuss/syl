@@ -408,3 +408,38 @@ func TestVimDemoModeTourAndChecklist(t *testing.T) {
 		t.Fatalf("expected demoStep to advance to 2 after 'd', got %d", m.demoStep)
 	}
 }
+
+func TestVimPaneFocusDimming(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Demo Card", Content: "# Preview Header\n\nPreview body content"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-dimming")
+	m.width = 100
+	m.height = 30
+	m.updateViewportSize()
+
+	// Initial state: activePane is PaneCards
+	if m.activePane != PaneCards {
+		t.Fatalf("expected initial activePane to be PaneCards")
+	}
+
+	viewCardsFocused := m.renderBaseView()
+	// When Cards is in focus, the Preview pane has DimANSI applied (\x1b[2m)
+	if !strings.Contains(viewCardsFocused, "\x1b[2m") {
+		t.Fatalf("expected dimmed escape codes in unfocused preview pane when Cards is active")
+	}
+
+	// Press 'w' to switch focus to Preview pane
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = u.(*Model)
+	if m.activePane != PanePreview {
+		t.Fatalf("expected activePane to be PanePreview after 'w'")
+	}
+
+	viewPreviewFocused := m.renderBaseView()
+	// When Preview is in focus, the Cards pane has DimANSI applied (\x1b[2m)
+	if !strings.Contains(viewPreviewFocused, "\x1b[2m") {
+		t.Fatalf("expected dimmed escape codes in unfocused cards pane when Preview is active")
+	}
+}
+
