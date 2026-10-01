@@ -23,7 +23,7 @@
 │                                       ├──────────────────────────┬─────────────────────────────┤
 │  > deploy the app with docker compose │  [CARDS]                 │  [PREVIEW]                  │
 │                                       │                          │                             │
-│  Assistant:                           │  ▶ 1. Docker Deployment  │  # Docker Deployment (v2)   │
+│  Assistant:                           │  > 1. Docker Deployment  │  # Docker Deployment (v2)   │
 │  Here is the updated command:         │     2. AWS Credentials   │  Run the compose service:   │
 │  $ docker compose up -d               │     3. Redis Setup       │  ```bash                    │
 │                                       │                          │  docker compose up -d       │
@@ -46,43 +46,43 @@ Conversational scrollback causes **procedural decay**. `syl` solves this by keep
 
 ## Core Capabilities
 
-### ⚡ Passive Observation & Zero-Prompt Curation
+### Passive Observation & Zero-Prompt Curation
 `syl` requires no special commands like *"jot this down"* or *"save to notes"*. It tails conversation transcripts (Antigravity, Claude Code, Pi, or custom logs) and synthesizes clean reference cards in real-time as your assistant answers.
 
-### 🔄 In-Place Mutation & Versioning (`v1` → `v2`)
+### In-Place Mutation & Versioning (`v1` → `v2`)
 When a follow-up answer fixes an error or updates a flag, `syl` patches the existing reference card in-place and increments its revision (`v1` → `v2` → `v3`). Disproven steps are marked invalidated rather than cluttering your screen with duplicate cards.
 
-### 🎯 Adjacent Workspace Awareness & Auto-Attach
+### Adjacent Workspace Awareness & Auto-Attach
 When launched in an adjacent terminal (via `cmux` or `tmux`), `syl` automatically detects the peer pane's working directory. It connects directly to conversations in that workspace without confusing unrelated projects.
 
-### ⏳ Waiting for Conversation Mode (`syl -n` / `N`)
+### Waiting for Conversation Mode (`syl -n` / `N`)
 Start a brand new session anytime by running `syl -n` or pressing **`N`** inside the TUI. `syl` clears the reference pane and displays a listening companion banner. As soon as you type your first prompt in the adjacent terminal, `syl` automatically detects the conversation and begins streaming cards.
 
-### 📦 Surgical Block & Step Picker (`b`)
+### Surgical Block & Step Picker (`b`)
 Press **`b`** on any card to scan and isolate actionable commands, numbered procedure steps, files, and URLs.
 * **1-Key Yanking**: Press **`1`**–**`9`** to copy a specific block to your system clipboard instantly.
 * **Direct Execution**: Press **`s`** to send the command directly into your active chat surface.
 * **Browser & File Opener**: Press **`o`** to open detected URLs or preview workspace files.
 
-### 🚀 Two-Way Terminal Bridge (`s`)
+### Two-Way Terminal Bridge (`s`)
 Press **`s`** on any card to inject a reference tag (`[Ref: Card Title (vN)] `) into your adjacent chat pane. Your cursor is placed directly after the tag so you can ask follow-ups or report error logs with zero copy-pasting.
 
-### ⌨️ Dual-Pane Vim Navigation (`w`, `j`/`k`)
+### Dual-Pane Vim Navigation (`w`, `j`/`k`)
 Seamless keyboard ergonomics built for developers:
 * **Focus Switch (`w`)**: Toggle focus between the **`[CARDS]`** turns column and the **`[PREVIEW]`** buffer.
 * **Vim Motions**: `Ctrl+d`/`Ctrl+u` (half page), `Ctrl+e`/`Ctrl+y` (1-line nudge), `{`/`}` (paragraph jump), `gg`/`G` (top/bottom).
 * **In-Buffer Search (`/`)**: Find matches within the active card preview and jump with **`n`** / **`N`**.
 
-### 📝 External `$EDITOR` Roundtrip (`v` / `E`)
+### External `$EDITOR` Roundtrip (`v` / `E`)
 Press **`v`** or **`E`** to suspend `syl` and open the current card in your editor of choice (`nvim`, `vim`, `nano`, or `code --wait`). Saved edits are automatically reloaded and persisted.
 
-### ☑️ Interactive Markdown Checklist (`Space`)
+### Interactive Markdown Checklist (`Space`)
 Press **`Space`** on cards containing task items (`- [ ]`) to check off steps interactively (`- [x]`). Once completed, pressing `Space` resets tasks back for repeatable workflows.
 
-### 🗂️ Code Block Folding (`za` / `Z`)
+### Code Block Folding (`za` / `Z`)
 Press **`za`** or **`Z`** to toggle code block folding on the active card, collapsing bulky multi-line blocks into concise quotes (`> ▾ [bash] 14 lines folded`).
 
-### 💾 Safe Persistence & Trash Lifecycle
+### Safe Persistence & Trash Lifecycle
 Cards, titles, pinned state, revision history, and the last 10 dropped cards are saved atomically to `~/.config/syl/sessions/<session-id>.json`:
 * **Undo Drops (`U`)**: Instantly restore the most recently dropped card, even across restarts.
 * **Trash Inspector (`T`)**: Browse dropped cards, restore with `Enter`, or purge with `x` then `y`.
