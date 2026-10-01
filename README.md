@@ -97,15 +97,15 @@ Download the latest pre-compiled binary for your architecture from [GitHub Relea
 
 ```bash
 # macOS (Apple Silicon arm64)
-curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_Darwin_arm64.tar.gz | tar -xz
+curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_darwin_arm64.tar.gz | tar -xz
 sudo mv syl /usr/local/bin/
 
-# macOS (Intel x86_64)
-curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_Darwin_x86_64.tar.gz | tar -xz
+# macOS (Intel amd64)
+curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_darwin_amd64.tar.gz | tar -xz
 sudo mv syl /usr/local/bin/
 
 # Linux (amd64)
-curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_Linux_x86_64.tar.gz | tar -xz
+curl -fsSL https://github.com/Fhuss/syl/releases/latest/download/syl_linux_amd64.tar.gz | tar -xz
 sudo mv syl /usr/local/bin/
 ```
 
