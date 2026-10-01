@@ -2006,14 +2006,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.isAgentBusy = false
 		if msg.Turn != nil && msg.Turn.ID <= m.lastTurnProcessed {
 			// Turn was already processed in a saved snapshot.
-			// Upgrade card title if a definitive title is now in cache.
-			if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
-				for _, c := range m.store.List() {
-					if len(c.History) > 0 && strings.Contains(c.History[0].Reason, fmt.Sprintf("Turn %d", msg.Turn.ID)) {
-						if !harness.IsDefinitiveTitle(c.Title) {
-							m.store.UpdateTitle(c.ID, cached)
-							m.updateViewportContent()
-							m.saveSessionState()
+			// Upgrade card title if a definitive title is now in cache (disabled in demo mode).
+			if !m.isDemo {
+				if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
+					for _, c := range m.store.List() {
+						if len(c.History) > 0 && strings.Contains(c.History[0].Reason, fmt.Sprintf("Turn %d", msg.Turn.ID)) {
+							if !harness.IsDefinitiveTitle(c.Title) {
+								m.store.UpdateTitle(c.ID, cached)
+								m.updateViewportContent()
+								m.saveSessionState()
+							}
 						}
 					}
 				}
@@ -2041,8 +2043,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, mut := range msg.Mutations {
 			switch mut.Op {
 			case reconciler.OpAdd:
-				// 1. Check title cache so restarted syl retains all past AI titles
-				if msg.Turn != nil {
+				// 1. Check title cache so restarted syl retains all past AI titles (disabled in demo mode)
+				if !m.isDemo && msg.Turn != nil {
 					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok {
 						mut.Title = cached
 					} else if cached, ok := harness.GetTitleCache().GetByPrompt(msg.Turn.User); ok {
@@ -2058,8 +2060,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 				m.toast = fmt.Sprintf("Added: %s", mut.Title)
 
-				// 2. Queue AI summarization if not definitive in cache
-				if msg.Turn != nil && m.runner != nil {
+				// 2. Queue AI summarization if not definitive in cache (disabled in demo mode)
+				if !m.isDemo && msg.Turn != nil && m.runner != nil {
 					hasDefinitive := false
 					if cached, ok := harness.GetTitleCache().Get(m.sessionLabel, msg.Turn.ID); ok && harness.IsDefinitiveTitle(cached) {
 						hasDefinitive = true
@@ -2074,7 +2076,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case reconciler.OpUpdate:
 				m.store.Update(mut.CardID, mut.Content, mut.Reason)
 				m.toast = fmt.Sprintf("Updated: %s", mut.Reason)
-				if msg.Turn != nil && m.runner != nil {
+				if !m.isDemo && msg.Turn != nil && m.runner != nil {
 					// Check if card ALREADY has a definitive title
 					c, ok := m.store.Get(mut.CardID)
 					if ok && harness.IsDefinitiveTitle(c.Title) {
@@ -2107,7 +2109,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case TitleSummarizedMsg:
-		if msg.Generation != m.generation || m.loadError != nil {
+		if m.isDemo || msg.Generation != m.generation || m.loadError != nil {
 			return m, nil
 		}
 		if m.store.UpdateTitle(msg.CardID, msg.Title) {
