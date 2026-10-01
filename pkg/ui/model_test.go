@@ -1660,3 +1660,117 @@ func TestModelVimSearchMatchNavigation(t *testing.T) {
 		t.Fatalf("expected searchMatchIdx 2 after 'N', got %d", m.searchMatchIdx)
 	}
 }
+
+func TestModelNewSessionAction(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Old Session Card", Content: "Card content"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "old-session")
+	m.width = 90
+	m.height = 25
+	m.updateViewportSize()
+
+	// Press 'N' to clear pane and start waiting for new session
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	m = u.(*Model)
+
+	if len(m.store.List()) != 0 {
+		t.Fatalf("expected 0 cards in store after 'N', got %d", len(m.store.List()))
+	}
+	if !m.waitingForSession {
+		t.Fatalf("expected waitingForSession to be true")
+	}
+	if m.sessionLabel != "waiting" {
+		t.Fatalf("expected sessionLabel to be 'waiting', got %q", m.sessionLabel)
+	}
+	if !strings.Contains(m.toast, "Waiting for conversation") {
+		t.Fatalf("expected waiting toast, got %q", m.toast)
+	}
+}
+
+func TestModelWaitingForSessionRender(t *testing.T) {
+	store := card.NewStore()
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "waiting")
+	m.width = 100
+	m.height = 30
+	m.updateViewportSize()
+
+	m.SetWaitingForSession(true, "/Users/dev/workspace-demo", "antigravity")
+	view := m.renderBaseView()
+
+	if !strings.Contains(view, "WAITING FOR CONVERSATION") {
+		t.Fatalf("expected header 'WAITING FOR CONVERSATION' in view, got:\n%s", view)
+	}
+	if !strings.Contains(view, "/Users/dev/workspace-demo") {
+		t.Fatalf("expected workspace path in waiting view, got:\n%s", view)
+	}
+	if !strings.Contains(strings.ToLower(view), "antigravity") {
+		t.Fatalf("expected agent name in waiting view, got:\n%s", view)
+	}
+}
+
+func TestModelNewSessionDetected(t *testing.T) {
+	t.Setenv("SYL_CONFIG_DIR", t.TempDir())
+	store := card.NewStore()
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "waiting")
+	m.width = 90
+	m.height = 25
+	m.updateViewportSize()
+	m.SetWaitingForSession(true, "/test/path", "claude")
+
+	tmpFile := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(tmpFile, []byte(""), 0o600); err != nil {
+		t.Fatalf("write temp transcript: %v", err)
+	}
+
+	u, _ := m.Update(newSessionDetectedMsg{
+		Session: watcher.SessionInfo{
+			ShortID: "new-sess-123",
+			Path:    tmpFile,
+			Agent:   "claude",
+		},
+	})
+	m = u.(*Model)
+
+	if m.waitingForSession {
+		t.Fatalf("expected waitingForSession to be false after newSessionDetectedMsg")
+	}
+	if m.sessionLabel != "new-sess-123" {
+		t.Fatalf("expected sessionLabel to be 'new-sess-123', got %q", m.sessionLabel)
+	}
+}
+
+func TestModelSessionSwitcherStartNewSession(t *testing.T) {
+	store := card.NewStore()
+	store.Add(&card.Card{ID: "c1", Title: "Active Card", Content: "Body"})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "current-session")
+	m.width = 90
+	m.height = 25
+	m.updateViewportSize()
+
+	// Open session switcher
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	m = u.(*Model)
+	if !m.showSessionSwitcher {
+		t.Fatalf("expected showSessionSwitcher to be true")
+	}
+	if m.selectedSessionIdx != 0 {
+		t.Fatalf("expected selectedSessionIdx to default to 0")
+	}
+
+	// Press Enter on item 0 ("✨ Start New Session")
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = u.(*Model)
+
+	if len(m.store.List()) != 0 {
+		t.Fatalf("expected store cleared, got %d cards", len(m.store.List()))
+	}
+	if !m.waitingForSession {
+		t.Fatalf("expected waitingForSession to be true")
+	}
+	if m.showSessionSwitcher {
+		t.Fatalf("expected session switcher modal to be closed")
+	}
+}
+

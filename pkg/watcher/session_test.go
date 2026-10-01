@@ -214,3 +214,106 @@ func TestDetectAgentFromPath(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectAutoSessionAntigravityCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_SESSION_FILE", "")
+
+	myProject := filepath.Join(home, "Dev", "syl")
+	otherProject := filepath.Join(home, "Dev", "wedding-app")
+
+	brainDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+
+	// Session 1: my project (older)
+	s1Dir := filepath.Join(brainDir, "session-syl", ".system_generated", "logs")
+	if err := os.MkdirAll(s1Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s1Path := filepath.Join(s1Dir, "transcript.jsonl")
+	s1Data := fmt.Sprintf("{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"User request in syl\"}\n{\"step_index\":1,\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"Cwd\":\"%s\"}}]}\n", myProject)
+	if err := os.WriteFile(s1Path, []byte(s1Data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tOld := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(s1Path, tOld, tOld)
+
+	// Session 2: other project (newer)
+	s2Dir := filepath.Join(brainDir, "session-wedding", ".system_generated", "logs")
+	if err := os.MkdirAll(s2Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s2Path := filepath.Join(s2Dir, "transcript.jsonl")
+	s2Data := fmt.Sprintf("{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"User request in wedding\"}\n{\"step_index\":1,\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"Cwd\":\"%s\"}}]}\n", otherProject)
+	if err := os.WriteFile(s2Path, []byte(s2Data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. When querying with myProject CWD, should match session-syl even though session-wedding is newer
+	sess, err := SelectAutoSession(myProject, "")
+	if err != nil || sess == nil {
+		t.Fatalf("expected to find session for %s, got %v", myProject, err)
+	}
+	if sess.ID != "session-syl" {
+		t.Errorf("expected session-syl, got %s", sess.ID)
+	}
+
+	// 2. When querying with non-existent project CWD, should return nil and NOT fall back to session-wedding
+	nonExistent := filepath.Join(home, "Dev", "unknown-repo")
+	sessNone, err := SelectAutoSession(nonExistent, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sessNone != nil {
+		t.Errorf("expected nil session for unknown CWD, but got %s (%s)", sessNone.ID, sessNone.Path)
+	}
+}
+
+func TestFindNewerSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	myProject := filepath.Join(home, "Dev", "syl")
+	brainDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+
+	sDir := filepath.Join(brainDir, "session-new", ".system_generated", "logs")
+	if err := os.MkdirAll(sDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sPath := filepath.Join(sDir, "transcript.jsonl")
+	sData := fmt.Sprintf("{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"New conversation started\"}\n{\"step_index\":1,\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"Cwd\":\"%s\"}}]}\n", myProject)
+	if err := os.WriteFile(sPath, []byte(sData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	_ = os.Chtimes(sPath, now, now)
+
+	// Since 5 seconds ago -> should find session-new
+	found, err := FindNewerSession(now.Add(-5*time.Second), myProject, "")
+	if err != nil || found == nil {
+		t.Fatalf("expected to find newer session, got %v", err)
+	}
+	if found.ID != "session-new" {
+		t.Errorf("expected session-new, got %s", found.ID)
+	}
+
+	// With excludeID = session-new -> should return nil
+	excluded, err := FindNewerSession(now.Add(-5*time.Second), myProject, "session-new")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if excluded != nil {
+		t.Errorf("expected nil when excluded, got %s", excluded.ID)
+	}
+
+	// Since 5 minutes in future -> should return nil
+	future, err := FindNewerSession(now.Add(5*time.Minute), myProject, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if future != nil {
+		t.Errorf("expected nil for future since time, got %s", future.ID)
+	}
+}
+

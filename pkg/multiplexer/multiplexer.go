@@ -116,12 +116,12 @@ func getCmuxCurrentSurface() string {
 	return os.Getenv("CMUX_SURFACE_ID")
 }
 
-// findCmuxPeer parses `cmux list-panels` to locate the adjacent terminal panel.
 func findCmuxPeer() (string, bool) {
-	if os.Getenv("CMUX_SURFACE_ID") == "" {
+	if _, err := exec.LookPath("cmux"); err != nil {
 		return "", false
 	}
-	if _, err := exec.LookPath("cmux"); err != nil {
+	current := getCmuxCurrentSurface()
+	if current == "" && os.Getenv("CMUX_SURFACE_ID") == "" && os.Getenv("CMUX_WORKSPACE_ID") == "" {
 		return "", false
 	}
 
@@ -130,7 +130,7 @@ func findCmuxPeer() (string, bool) {
 		return "", false
 	}
 
-	return ParseCmuxPanels(string(out), getCmuxCurrentSurface())
+	return ParseCmuxPanels(string(out), current)
 }
 
 // cmuxPanelRunsSyl checks the displayed command, not arbitrary words in the
@@ -375,3 +375,76 @@ func DetectPeerAgent() string {
 
 	return ""
 }
+
+// ParseCmuxPeerCWD extracts the working directory of the peer terminal surface from `cmux debug-terminals`.
+func ParseCmuxPeerCWD(output string, peerSurface string) string {
+	if peerSurface == "" {
+		return ""
+	}
+	lines := strings.Split(output, "\n")
+	inTargetSurface := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.Contains(line, peerSurface) {
+			inTargetSurface = true
+		} else if inTargetSurface && strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "surface:") {
+			inTargetSurface = false
+		}
+
+		if inTargetSurface {
+			fields := strings.Fields(line)
+			for _, f := range fields {
+				if strings.HasPrefix(f, "cwd=") {
+					return strings.TrimPrefix(f, "cwd=")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ParseTmuxPeerCWD extracts the working directory of the peer tmux pane from `tmux list-panes -F "#{pane_id} #{pane_current_path}"`.
+func ParseTmuxPeerCWD(output string, peerPane string) string {
+	if peerPane == "" {
+		return ""
+	}
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == peerPane {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// DetectPeerCWD inspects adjacent multiplexer panels (cmux or tmux) to identify
+// the current working directory of the terminal running alongside syl.
+func DetectPeerCWD() string {
+	// 1. Check cmux
+	if _, err := exec.LookPath("cmux"); err == nil {
+		if peer, ok := findCmuxPeer(); ok {
+			if out, err := exec.Command("cmux", "debug-terminals").Output(); err == nil {
+				if cwd := ParseCmuxPeerCWD(string(out), peer); cwd != "" {
+					return cwd
+				}
+			}
+		}
+	}
+
+	// 2. Check tmux
+	if os.Getenv("TMUX") != "" {
+		if _, err := exec.LookPath("tmux"); err == nil {
+			if peer, ok := findTmuxPeer(); ok {
+				if out, err := exec.Command("tmux", "list-panes", "-F", "#{pane_id} #{pane_current_path}").Output(); err == nil {
+					if cwd := ParseTmuxPeerCWD(string(out), peer); cwd != "" {
+						return cwd
+					}
+				}
+			}
+		}
+	}
+
+	return ""
+}
+

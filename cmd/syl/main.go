@@ -33,6 +33,7 @@ Usage:
   syl [command|flags]
 
 Commands:
+  new / clear        Clear reference pane and wait for new conversation
   demo               Run an interactive simulation demonstrating live card mutation
   sessions           List active and recent conversation sessions to choose from
   install-skill      Install companion skill into Pi Agent, Claude Code, or Antigravity
@@ -41,6 +42,7 @@ Commands:
   version            Print version information
 
 Flags:
+  -n, --new            Start a new session / clear pane and wait for conversation
   -s, --session string Attach to a specific conversation session by ID or prefix
   -f, --file string    Path to transcript.jsonl (auto-detected if omitted)
   -c, --config string  Path to config file (default ~/.config/syl/config.yaml)
@@ -56,6 +58,7 @@ Keys in TUI:
   [u]          Open card URL directly in browser
   [/]          Quick search & filter cards interactively
   [S]          Switch active conversation session (Antigravity/Claude/Pi)
+  [N, Ctrl+n]  Clear pane / start new session (auto-attaches on prompt)
   [R]          Retry failed card capture before processing later turns
   [c]          Copy card code snippet(s) to system clipboard
   [C / y]      Copy full card markdown content to clipboard
@@ -80,6 +83,7 @@ Keys in TUI:
 		providerFlag string
 		harnessFlag  string
 		showVersion  bool
+		newFlag      bool
 	)
 
 	flag.StringVar(&sessionFlag, "session", "", "Session ID or prefix to watch")
@@ -91,6 +95,9 @@ Keys in TUI:
 	flag.StringVar(&providerFlag, "provider", "", "LLM provider override (mock, openai, gemini, anthropic, ollama)")
 	flag.StringVar(&providerFlag, "p", "", "LLM provider override (shorthand)")
 	flag.StringVar(&harnessFlag, "harness", "", "Subagent harness override (auto, agy, claude, pi, ollama, heuristic)")
+	flag.BoolVar(&newFlag, "new", false, "Start a new session / clear pane and wait for conversation")
+	flag.BoolVar(&newFlag, "n", false, "Start a new session / clear pane (shorthand)")
+	flag.BoolVar(&newFlag, "clear", false, "Clear pane and wait for conversation")
 	flag.BoolVar(&showVersion, "version", false, "Print version")
 	flag.Parse()
 
@@ -104,6 +111,7 @@ Keys in TUI:
 	if len(args) > 0 {
 		subcommand = args[0]
 	}
+	isNew := newFlag || subcommand == "new" || subcommand == "clear"
 
 	if subcommand == "version" {
 		fmt.Printf("syl version %s\n", version)
@@ -230,50 +238,68 @@ Keys in TUI:
 		sessionLabel = "demo"
 	}
 	var detectedAgent string
+	var searchCWD string
 	if !isDemo {
-		transcriptPath = fileFlag
-		if transcriptPath != "" {
-			detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
+		// Detect peer CWD from adjacent terminal (cmux/tmux) or fallback to current dir
+		if peerCWD := multiplexer.DetectPeerCWD(); peerCWD != "" {
+			searchCWD = peerCWD
+		} else {
+			searchCWD, _ = os.Getwd()
 		}
 
-		if transcriptPath == "" && sessionFlag != "" {
-			session, err := watcher.FindSessionByID(sessionFlag)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
-				os.Exit(1)
-			}
-			transcriptPath = session.Path
-			sessionLabel = session.ShortID
-			detectedAgent = session.Agent
+		// Detect peer agent from adjacent terminal (cmux/tmux)
+		if peer := multiplexer.DetectPeerAgent(); peer != "" {
+			detectedAgent = peer
 		}
 
-		if transcriptPath == "" {
-			transcriptPath = cfg.Watcher.TranscriptPath
+		if isNew {
+			// Explicitly starting a new session: do not auto-attach to an existing transcript
+			transcriptPath = ""
+			sessionLabel = ""
+		} else {
+			transcriptPath = fileFlag
 			if transcriptPath != "" {
 				detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
 			}
-		}
 
-		if transcriptPath == "" {
-			cwd, _ := os.Getwd()
-			session, err := watcher.SelectAutoSession(cwd, multiplexer.PeerSessionFile())
-			if err == nil && session != nil {
+			if transcriptPath == "" && sessionFlag != "" {
+				session, err := watcher.FindSessionByID(sessionFlag)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Session error: %v\n", err)
+					os.Exit(1)
+				}
 				transcriptPath = session.Path
 				sessionLabel = session.ShortID
 				detectedAgent = session.Agent
 			}
-		}
 
-		if transcriptPath != "" && sessionLabel == "" {
-			var err error
-			sessionLabel, err = fileSessionLabel(transcriptPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Invalid transcript path: %v\n", err)
-				os.Exit(1)
+			if transcriptPath == "" {
+				transcriptPath = cfg.Watcher.TranscriptPath
+				if transcriptPath != "" {
+					detectedAgent = watcher.DetectAgentFromPath(transcriptPath)
+				}
+			}
+
+			if transcriptPath == "" {
+				session, err := watcher.SelectAutoSession(searchCWD, multiplexer.PeerSessionFile())
+				if err == nil && session != nil {
+					transcriptPath = session.Path
+					sessionLabel = session.ShortID
+					detectedAgent = session.Agent
+				}
+			}
+
+			if transcriptPath != "" && sessionLabel == "" {
+				var err error
+				sessionLabel, err = fileSessionLabel(transcriptPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Invalid transcript path: %v\n", err)
+					os.Exit(1)
+				}
 			}
 		}
 
-		// Fall back to checking adjacent terminal in cmux or tmux
+		// Fall back to checking adjacent terminal in cmux or tmux if agent is still unknown
 		if detectedAgent == "" || detectedAgent == "unknown" || detectedAgent == "file" {
 			if peer := multiplexer.DetectPeerAgent(); peer != "" {
 				detectedAgent = peer
@@ -307,8 +333,13 @@ Keys in TUI:
 	}
 
 	model := ui.NewModel(store, rec, subagentHarness, nil, nil, isDemo, sessionLabel)
-	if transcriptPath != "" {
-		model.StartWatching(transcriptPath)
+	if !isDemo {
+		if transcriptPath != "" {
+			model.SetWaitingForSession(false, searchCWD, detectedAgent)
+			model.StartWatching(transcriptPath)
+		} else {
+			model.SetWaitingForSession(true, searchCWD, detectedAgent)
+		}
 	}
 	defer model.StopWatching()
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())

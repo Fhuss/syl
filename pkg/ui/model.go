@@ -89,6 +89,12 @@ type retryReconcileMsg struct {
 
 type ClearToastMsg struct{}
 
+type checkNewSessionMsg struct{}
+type pollAgainMsg struct{}
+type newSessionDetectedMsg struct {
+	Session watcher.SessionInfo
+}
+
 type Button struct {
 	Label  string
 	Action string
@@ -165,6 +171,22 @@ type Model struct {
 	searchMatches  []int
 	searchMatchIdx int
 	currentContent string
+
+	// Waiting for conversation mode
+	waitingForSession bool
+	waitingSince      time.Time
+	peerCWD           string
+	peerAgent         string
+}
+
+func (m *Model) SetWaitingForSession(waiting bool, peerCWD, peerAgent string) {
+	m.waitingForSession = waiting
+	if waiting {
+		m.waitingSince = time.Now().Add(-2 * time.Second)
+		m.sessionLabel = "waiting"
+	}
+	m.peerCWD = peerCWD
+	m.peerAgent = peerAgent
 }
 
 func snapshotLoadWarning(err error) string {
@@ -253,6 +275,9 @@ func (m *Model) Init() tea.Cmd {
 	if m.isDemo {
 		cmds = append(cmds, m.advanceDemo())
 	} else {
+		if m.waitingForSession {
+			cmds = append(cmds, m.pollNewSessionCmd())
+		}
 		if m.turnCh != nil {
 			cmds = append(cmds, m.listenForTurns())
 		}
@@ -262,6 +287,12 @@ func (m *Model) Init() tea.Cmd {
 	}
 
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) pollNewSessionCmd() tea.Cmd {
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+		return checkNewSessionMsg{}
+	})
 }
 
 // StopWatching cancels the active file tail and pending channel listeners.
@@ -1264,6 +1295,7 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	m.harness = harness.NewAutoHarness(harnessChoice, "")
 	m.runner = harness.NewRunner(m.harness, 1)
 
+	m.waitingForSession = false
 	m.StartWatching(sess.Path)
 
 	m.toast = fmt.Sprintf("✓ Switched to session [%s] (%s)", sess.ShortID, sess.Agent)
@@ -1272,6 +1304,57 @@ func (m *Model) actionSwitchSession(sess watcher.SessionInfo) tea.Cmd {
 	return tea.Batch(
 		m.listenForTurns(),
 		m.listenForActivity(),
+		tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return ClearToastMsg{}
+		}),
+	)
+}
+
+func (m *Model) actionNewSession() tea.Cmd {
+	if m.isDemo {
+		m.toast = "Demo mode: session switching disabled"
+		return nil
+	}
+
+	if m.loadError == nil && len(m.store.List()) > 0 {
+		_ = m.saveSessionState()
+	}
+
+	m.StopWatching()
+	m.store = card.NewStore()
+	m.selectedIndex = 0
+	m.historyIndex = 0
+	m.historyCardID = ""
+	m.lastTurnProcessed = 0
+	m.pendingTurns = nil
+	m.failedTurn = nil
+	m.reconcileAttempts = 0
+	m.reconciling = false
+	m.isAgentBusy = false
+	m.showSessionSwitcher = false
+	m.showBlockPicker = false
+	m.showTrash = false
+	m.confirmTrashPurge = false
+	m.selectedTrashIdx = 0
+	m.sessionLabel = "waiting"
+	m.sessionFilePath = ""
+	m.searchMatches = nil
+	m.waitingForSession = true
+	m.waitingSince = time.Now().Add(-2 * time.Second)
+	if peerCWD := multiplexer.DetectPeerCWD(); peerCWD != "" {
+		m.peerCWD = peerCWD
+	} else if m.peerCWD == "" {
+		m.peerCWD, _ = os.Getwd()
+	}
+	if peerAgent := multiplexer.DetectPeerAgent(); peerAgent != "" {
+		m.peerAgent = peerAgent
+	}
+
+	m.toast = "✓ Pane cleared. Waiting for conversation in adjacent terminal..."
+	m.updateViewportContent()
+
+	return tea.Batch(
+		m.pollNewSessionCmd(),
 		tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			return ClearToastMsg{}
 		}),
@@ -1390,11 +1473,31 @@ func (m *Model) buildSessionSwitcherModal() string {
 	var b strings.Builder
 	b.WriteString(title + "\n" + sub + "\n\n")
 
+	// Option 0: Start New Session
+	isNewSelected := m.selectedSessionIdx == 0
+	newPrefix := "  "
+	if isNewSelected {
+		newPrefix = "❯ "
+	}
+	newSessionLine := fmt.Sprintf("%s✨ %s  %s", newPrefix,
+		lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("Start New Session"),
+		lipgloss.NewStyle().Foreground(ColorMuted).Render("(Clear pane & wait for prompt)"))
+	if isNewSelected {
+		b.WriteString(lipgloss.NewStyle().Background(ColorHighlight).Bold(true).Width(boxWidth-4).Render(newSessionLine) + "\n")
+	} else {
+		b.WriteString(newSessionLine + "\n")
+	}
+	divLen := boxWidth - 8
+	if divLen < 10 {
+		divLen = 10
+	}
+	b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  " + strings.Repeat("─", divLen) + "\n"))
+
 	if len(m.sessionList) == 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No conversation sessions found.\n"))
+		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("  No prior conversation sessions found.\n"))
 	} else {
 		for i, s := range m.sessionList {
-			isSelected := i == m.selectedSessionIdx
+			isSelected := (i + 1) == m.selectedSessionIdx
 			prefix := "  "
 			if isSelected {
 				prefix = "❯ "
@@ -1431,7 +1534,7 @@ func (m *Model) buildSessionSwitcherModal() string {
 	footer := lipgloss.NewStyle().
 		Foreground(ColorMuted).
 		Italic(true).
-		Render("[j/k, ↑/↓] Navigate • [Enter] Switch • [Esc] Cancel")
+		Render("[j/k, ↑/↓] Navigate • [Enter] Select • [N] New Session • [Esc] Cancel")
 	b.WriteString(footer)
 
 	modalBox := lipgloss.NewStyle().
@@ -1546,9 +1649,10 @@ func (m *Model) buildHelpModal() string {
 
 	// 3. Session & Card Management
 	b.WriteString(secHeader("🗂", "Session & Organization") + "\n")
+	b.WriteString(renderBadgeRow("N", BadgeKeyWarning, "New Session", "Clear reference pane and wait for conversation in adjacent terminal") + "\n")
+	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Browse and switch conversation sessions (agy, claude, pi)") + "\n")
 	b.WriteString(renderBadgeRow("/", BadgeKeyWarning, "Find Cards", "Search & filter reference cards interactively") + "\n")
 	b.WriteString(renderBadgeRow("n / N", BadgeKeyWarning, "Next / Prev Match", "Jump to next or previous in-card search match") + "\n")
-	b.WriteString(renderBadgeRow("S", BadgeKeyWarning, "Switch Session", "Switch active conversation session (agy, claude, pi)") + "\n")
 	b.WriteString(renderBadgeRow("R", BadgeKeyWarning, "Retry Capture", "Retry a failed card turn before later turns are processed") + "\n")
 	b.WriteString(renderBadgeRow("p", BadgeKeyWarning, "Pin Card", "Pin / unpin card (protect from pruning)") + "\n")
 	b.WriteString(renderBadgeRow("e", BadgeKeyWarning, "Export Cards", "Export session reference cards to markdown") + "\n")
@@ -1777,12 +1881,13 @@ func (m *Model) handleButtonAction(action string) tea.Cmd {
 		m.searchSavedIdx = m.selectedIndex
 	case "sessions":
 		if !m.isDemo {
-			if sessions, err := watcher.ListSessions(12); err == nil && len(sessions) > 0 {
-				m.sessionList = sessions
-				m.selectedSessionIdx = 0
-				m.showSessionSwitcher = true
-			}
+			sessions, _ := watcher.ListSessions(12)
+			m.sessionList = sessions
+			m.selectedSessionIdx = 0
+			m.showSessionSwitcher = true
 		}
+	case "new_session":
+		return m.actionNewSession()
 	case "help":
 		m.showHelp = !m.showHelp
 	case "demo_next":
@@ -1850,6 +1955,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case checkNewSessionMsg:
+		if !m.waitingForSession {
+			return m, nil
+		}
+		peerCWD := m.peerCWD
+		waitingSince := m.waitingSince
+		excludeID := ""
+		return m, func() tea.Msg {
+			sess, err := watcher.FindNewerSession(waitingSince, peerCWD, excludeID)
+			if err == nil && sess != nil {
+				return newSessionDetectedMsg{Session: *sess}
+			}
+			return pollAgainMsg{}
+		}
+
+	case pollAgainMsg:
+		if m.waitingForSession {
+			return m, m.pollNewSessionCmd()
+		}
+		return m, nil
+
+	case newSessionDetectedMsg:
+		if !m.waitingForSession {
+			return m, nil
+		}
+		m.waitingForSession = false
+		return m, m.actionSwitchSession(msg.Session)
 
 	case agentActivityMsg:
 		if msg.Generation != m.generation {
@@ -2140,11 +2273,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "S":
 				m.showHelp = false
 				if !m.isDemo {
-					if sessions, err := watcher.ListSessions(12); err == nil && len(sessions) > 0 {
-						m.sessionList = sessions
-						m.selectedSessionIdx = 0
-						m.showSessionSwitcher = true
-					}
+					sessions, _ := watcher.ListSessions(12)
+					m.sessionList = sessions
+					m.selectedSessionIdx = 0
+					m.showSessionSwitcher = true
+				}
+				return m, nil
+			case "N", "ctrl+n":
+				m.showHelp = false
+				if !m.isDemo {
+					return m, m.actionNewSession()
 				}
 				return m, nil
 			case "r":
@@ -2253,13 +2391,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "down", "j":
-				if m.selectedSessionIdx < len(m.sessionList)-1 {
+				if m.selectedSessionIdx < len(m.sessionList) {
 					m.selectedSessionIdx++
 				}
 				return m, nil
+			case "n", "N":
+				return m, m.actionNewSession()
 			case "enter":
-				if len(m.sessionList) > 0 && m.selectedSessionIdx < len(m.sessionList) {
-					return m, m.actionSwitchSession(m.sessionList[m.selectedSessionIdx])
+				if m.selectedSessionIdx == 0 {
+					return m, m.actionNewSession()
+				}
+				targetIdx := m.selectedSessionIdx - 1
+				if len(m.sessionList) > 0 && targetIdx < len(m.sessionList) {
+					return m, m.actionSwitchSession(m.sessionList[targetIdx])
 				}
 				return m, nil
 			default:
@@ -2398,11 +2542,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toast = "Demo mode: session switching disabled"
 				return m, nil
 			}
-			sessions, err := watcher.ListSessions(12)
-			if err != nil || len(sessions) == 0 {
-				m.toast = "No active or past sessions found"
-				return m, nil
-			}
+			sessions, _ := watcher.ListSessions(12)
 			m.sessionList = sessions
 			m.selectedSessionIdx = 0
 			m.showSessionSwitcher = true
@@ -2461,11 +2601,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.actionToggleChecklist()
 
 		case "n":
-			m.jumpSearchMatch(true)
+			if len(m.searchMatches) > 0 {
+				m.jumpSearchMatch(true)
+				return m, nil
+			}
 			return m, nil
 
-		case "N":
-			m.jumpSearchMatch(false)
+		case "N", "ctrl+n":
+			if msg.String() == "N" && len(m.searchMatches) > 0 {
+				m.jumpSearchMatch(false)
+				return m, nil
+			}
+			if !m.isDemo {
+				return m, m.actionNewSession()
+			}
 			return m, nil
 
 		// Scrolling preview viewport content
@@ -2928,6 +3077,8 @@ func (m *Model) renderBaseView() string {
 		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("SAVE FAILED · Q TO RETRY")
 	} else if m.failedTurn != nil && !m.reconciling {
 		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render("CAPTURE PAUSED · R TO RETRY")
+	} else if m.waitingForSession {
+		statusBadge = lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render(m.spinner.View() + " WAITING FOR CONVERSATION")
 	} else if m.isAgentBusy {
 		toolName := m.agentTool
 		if toolName == "" {
@@ -2943,7 +3094,9 @@ func (m *Model) renderBaseView() string {
 	}
 
 	sessionBadge := ""
-	if m.sessionLabel != "" {
+	if m.waitingForSession {
+		sessionBadge = lipgloss.NewStyle().Foreground(ColorWarning).Render("[NEW]") + " "
+	} else if m.sessionLabel != "" {
 		sessionBadge = lipgloss.NewStyle().Foreground(ColorMuted).Render("["+m.sessionLabel+"]") + " "
 	}
 
@@ -2962,6 +3115,8 @@ func (m *Model) renderBaseView() string {
 	var headerRight string
 	if m.toast != "" {
 		headerRight = ToastStyle.Render(m.toast)
+	} else if m.waitingForSession {
+		headerRight = FooterStyle.Render("Listening...")
 	} else {
 		headerRight = FooterStyle.Render(fmt.Sprintf("%d cards", len(cards)))
 	}
@@ -2979,7 +3134,39 @@ func (m *Model) renderBaseView() string {
 	var body string
 	if len(cards) == 0 {
 		var emptyMsg string
-		if m.isAgentBusy {
+		if m.waitingForSession {
+			workspaceInfo := m.peerCWD
+			if workspaceInfo == "" {
+				workspaceInfo, _ = os.Getwd()
+			}
+			agentInfo := m.peerAgent
+			if agentInfo == "" {
+				agentInfo = "AI Assistant"
+			} else {
+				agentInfo = strings.ToUpper(agentInfo)
+			}
+
+			title := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorPrimary).
+				Render(fmt.Sprintf("%s WAITING FOR CONVERSATION", m.spinner.View()))
+
+			subtitle := lipgloss.NewStyle().
+				Foreground(ColorMuted).
+				Render("Syl is active and ready to stream reference cards from your adjacent terminal.")
+
+			details := lipgloss.NewStyle().Render(fmt.Sprintf(
+				"• Target Workspace: %s\n• Companion Agent:  %s\n• Live Status:      Listening for initial prompt...",
+				lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render(workspaceInfo),
+				lipgloss.NewStyle().Bold(true).Foreground(ColorWarning).Render(agentInfo),
+			))
+
+			hints := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true).Render(
+				"💡 Ready when you are:\n   1. Type your prompt in the adjacent terminal to begin.\n   2. Reference cards will appear automatically as the assistant responds.\n   • Press [S] to browse and attach to an earlier session.\n   • Press [?] for keyboard shortcuts.",
+			)
+
+			emptyMsg = fmt.Sprintf("%s\n%s\n\n%s\n\n%s", title, subtitle, details, hints)
+		} else if m.isAgentBusy {
 			agentName := "AGY"
 			if m.runner != nil && m.runner.Name() != "" && m.runner.Name() != "heuristic" {
 				agentName = strings.ToUpper(m.runner.Name())

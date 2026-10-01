@@ -174,3 +174,38 @@ func TestParseTmuxAgent(t *testing.T) {
 		t.Errorf("expected claude, got %s", agentClaude)
 	}
 }
+
+func TestParseCmuxPeerCWD(t *testing.T) {
+	debugOutput := `[0] surface:2 "syl" mapped=1 tree=1 window=window:1
+    tty=ttys010 cwd=/Users/fabian/Dev/Fhuss.github.io branch=main
+[1] surface:1 "agyd" mapped=1 tree=1 window=window:1
+    tty=ttys009 cwd=/Users/fabian/Dev/syl branch=main
+[2] surface:5 "pi" mapped=1
+    tty=ttys008 cwd=/Users/fabian/Dev/other`
+
+	cwd := ParseCmuxPeerCWD(debugOutput, "surface:1")
+	if cwd != "/Users/fabian/Dev/syl" {
+		t.Errorf("expected /Users/fabian/Dev/syl, got %q", cwd)
+	}
+
+	cwdEmpty := ParseCmuxPeerCWD(debugOutput, "surface:99")
+	if cwdEmpty != "" {
+		t.Errorf("expected empty string for non-existent surface, got %q", cwdEmpty)
+	}
+}
+
+func TestParseTmuxPeerCWD(t *testing.T) {
+	panesOutput := `%0 /Users/fabian/Dev/syl
+%1 /Users/fabian/Dev/other`
+
+	cwd := ParseTmuxPeerCWD(panesOutput, "%0")
+	if cwd != "/Users/fabian/Dev/syl" {
+		t.Errorf("expected /Users/fabian/Dev/syl, got %q", cwd)
+	}
+
+	cwdMissing := ParseTmuxPeerCWD(panesOutput, "%9")
+	if cwdMissing != "" {
+		t.Errorf("expected empty string for non-existent pane, got %q", cwdMissing)
+	}
+}
+

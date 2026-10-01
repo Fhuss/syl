@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Fhuss/syl/pkg/card"
+	"github.com/Fhuss/syl/pkg/watcher"
 )
 
 func TestFileSessionLabelKeepsTranscriptsSeparate(t *testing.T) {
@@ -57,3 +58,18 @@ func TestFileSessionLabelKeepsTranscriptsSeparate(t *testing.T) {
 		t.Fatalf("second transcript loaded first snapshot: %v", err)
 	}
 }
+
+func TestSelectAutoSessionPeerCWDMatching(t *testing.T) {
+	// If peer/search CWD is set to a directory with no sessions,
+	// SelectAutoSession should return nil rather than arbitrarily picking a session
+	// from an unrelated project.
+	emptyWorkspace := t.TempDir()
+	sess, err := watcher.SelectAutoSession(emptyWorkspace, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sess != nil && sess.CWD != "" && sess.CWD != emptyWorkspace {
+		t.Fatalf("expected nil or matching session, got session for CWD %q", sess.CWD)
+	}
+}
+

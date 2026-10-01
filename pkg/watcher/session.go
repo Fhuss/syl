@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type SessionInfo struct {
 	Path    string    `json:"path"`
 	ModTime time.Time `json:"mod_time"`
 	Agent   string    `json:"agent"` // "antigravity", "claude", "pi", "custom", "local", "file"
+	CWD     string    `json:"cwd,omitempty"`
 }
 
 type discoverySource struct {
@@ -159,6 +161,7 @@ func ListSessions(limit int) ([]SessionInfo, error) {
 					Path:    m,
 					ModTime: info.ModTime(),
 					Agent:   src.agent,
+					CWD:     ExtractSessionCWD(m, src.agent),
 				})
 			}
 		}
@@ -177,6 +180,7 @@ func ListSessions(limit int) ([]SessionInfo, error) {
 					Path:    abs,
 					ModTime: info.ModTime(),
 					Agent:   "local",
+					CWD:     filepath.Dir(abs),
 				})
 			}
 		}
@@ -266,14 +270,14 @@ func DetectAgentFromPath(path string) string {
 }
 
 // SelectAutoSession prefers an exact transcript passed by the invoking agent or
-// bound to its adjacent pane. Without one, prefer sessions in the current working
+// bound to its adjacent pane. Without one, prefer sessions in the target working
 // directory over unrelated, more recently modified conversations.
 func SelectAutoSession(cwd, peerPath string) (*SessionInfo, error) {
 	for _, path := range []string{os.Getenv("PI_SESSION_FILE"), peerPath} {
 		if path == "" {
 			continue
 		}
-		if session, err := FindSessionByID(path); err == nil && session.Agent == "pi" {
+		if session, err := FindSessionByID(path); err == nil {
 			return session, nil
 		}
 	}
@@ -283,16 +287,155 @@ func SelectAutoSession(cwd, peerPath string) (*SessionInfo, error) {
 		return nil, err
 	}
 	if cwd != "" {
+		cleanCWD := filepath.Clean(cwd)
 		for _, session := range sessions {
-			if session.Agent == "pi" && piSessionCWD(session.Path) == cwd {
+			sessionCWD := session.CWD
+			if sessionCWD == "" {
+				sessionCWD = ExtractSessionCWD(session.Path, session.Agent)
+			}
+			if sessionCWD != "" && filepath.Clean(sessionCWD) == cleanCWD {
 				return &session, nil
 			}
 		}
+		// If a specific working directory was requested/detected, but no sessions match it,
+		// do not fall back to an unrelated conversation from another directory.
+		return nil, nil
 	}
 	if len(sessions) > 0 {
 		return &sessions[0], nil
 	}
 	return nil, nil
+}
+
+// FindNewerSession looks for any conversation session created or modified since `since`.
+// If `cwd` is non-empty, only sessions belonging to `cwd` (or whose CWD is newly created) match.
+func FindNewerSession(since time.Time, cwd string, excludeID string) (*SessionInfo, error) {
+	sessions, err := ListSessions(15)
+	if err != nil {
+		return nil, err
+	}
+
+	cleanCWD := ""
+	if cwd != "" {
+		cleanCWD = filepath.Clean(cwd)
+	}
+
+	for _, s := range sessions {
+		if excludeID != "" && (strings.EqualFold(s.ID, excludeID) || strings.EqualFold(s.ShortID, excludeID)) {
+			continue
+		}
+		// Allow 1 second tolerance for timestamp granularity
+		if s.ModTime.After(since) || s.ModTime.Equal(since) || s.ModTime.After(since.Add(-1*time.Second)) {
+			if cleanCWD != "" {
+				sessCWD := s.CWD
+				if sessCWD == "" {
+					sessCWD = ExtractSessionCWD(s.Path, s.Agent)
+				}
+				if sessCWD != "" && filepath.Clean(sessCWD) != cleanCWD {
+					continue
+				}
+			}
+			return &s, nil
+		}
+	}
+	return nil, nil
+}
+
+var (
+	antigravityCwdRegex  = regexp.MustCompile(`"Cwd":\s*"\\?"?([^"\\]+)`)
+	antigravityWorkRegex = regexp.MustCompile(`(?:Command Working Directory:|Active Workspaces:\s*-\s*)([^\n\r<]+)`)
+)
+
+// ExtractSessionCWD attempts to detect the project or working directory for a conversation session.
+func ExtractSessionCWD(path, agent string) string {
+	switch agent {
+	case "pi":
+		return piSessionCWD(path)
+	case "claude":
+		return claudeSessionCWD(path)
+	case "antigravity":
+		return antigravitySessionCWD(path)
+	default:
+		if cwd := piSessionCWD(path); cwd != "" {
+			return cwd
+		}
+		if cwd := antigravitySessionCWD(path); cwd != "" {
+			return cwd
+		}
+		return claudeSessionCWD(path)
+	}
+}
+
+func antigravitySessionCWD(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	linesScanned := 0
+	for scanner.Scan() && linesScanned < 35 {
+		linesScanned++
+		line := scanner.Text()
+		if m := antigravityCwdRegex.FindStringSubmatch(line); len(m) > 1 {
+			val := strings.TrimSpace(m[1])
+			if filepath.IsAbs(val) {
+				return filepath.Clean(val)
+			}
+		}
+		if m := antigravityWorkRegex.FindStringSubmatch(line); len(m) > 1 {
+			val := strings.TrimSpace(m[1])
+			if filepath.IsAbs(val) {
+				return filepath.Clean(val)
+			}
+		}
+	}
+	return ""
+}
+
+func claudeSessionCWD(path string) string {
+	// 1. Check path structure: ~/.claude/projects/<slug>/...
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	for i, p := range parts {
+		if p == "projects" && i+1 < len(parts) {
+			slug := parts[i+1]
+			// e.g. -Users-fabian-Dev-syl -> /Users/fabian/Dev/syl
+			if strings.HasPrefix(slug, "-") {
+				decoded := "/" + strings.ReplaceAll(strings.TrimPrefix(slug, "-"), "-", "/")
+				if info, err := os.Stat(decoded); err == nil && info.IsDir() {
+					return filepath.Clean(decoded)
+				}
+			}
+		}
+	}
+
+	// 2. Scan first few lines for cwd in Claude JSON records
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	linesScanned := 0
+	for scanner.Scan() && linesScanned < 25 {
+		linesScanned++
+		line := scanner.Text()
+		if m := antigravityCwdRegex.FindStringSubmatch(line); len(m) > 1 {
+			val := strings.TrimSpace(m[1])
+			if filepath.IsAbs(val) {
+				return filepath.Clean(val)
+			}
+		}
+	}
+	return ""
 }
 
 // piSessionCWD reads only the header; directory names alone can be ambiguous
@@ -338,6 +481,7 @@ func FindSessionByID(query string) (*SessionInfo, error) {
 				Path:    abs,
 				ModTime: stat.ModTime(),
 				Agent:   agent,
+				CWD:     ExtractSessionCWD(abs, agent),
 			}, nil
 		}
 	}
