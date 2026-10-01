@@ -145,6 +145,51 @@ var (
 			Foreground(lipgloss.Color("#ECEFF4")).
 			Background(lipgloss.Color("#4C566A")).
 			Padding(0, 1)
+
+	// Unfocused card item styles (subtly tinted and softened, highly legible without crushing contrast)
+	CardItemUnfocusedStyle = lipgloss.NewStyle().
+				Padding(0, 1).
+				Foreground(lipgloss.Color("#A2ADB9"))
+
+	CardSelectedUnfocusedStyle = lipgloss.NewStyle().
+					Padding(0, 1).
+					Background(lipgloss.Color("#252A34")).
+					Foreground(lipgloss.Color("#D8DEE9")).
+					Bold(false)
+
+	BadgeNumberUnfocusedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#66899E"))
+
+	BadgeVersionUnfocusedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#505A6B"))
+
+	// Unfocused badges with muted, pleasant tones
+	BadgeCmdUnfocused = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#16191E")).
+				Background(lipgloss.Color("#038A55")).
+				Padding(0, 1).
+				SetString("CMD")
+
+	BadgeDecUnfocused = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#16191E")).
+				Background(lipgloss.Color("#C98A00")).
+				Padding(0, 1).
+				SetString("DEC")
+
+	BadgeInfoUnfocused = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#ECEFF4")).
+				Background(lipgloss.Color("#4C566A")).
+				Padding(0, 1).
+				SetString("INFO")
+
+	BadgeInvalidUnfocused = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#ECEFF4")).
+				Background(lipgloss.Color("#A82E3E")).
+				Padding(0, 1).
+				SetString("INVALID")
 )
 
 // DimANSI applies ECMA-48 / ANSI faint mode (SGR 2) line-by-line to reduce contrast

@@ -1378,9 +1378,13 @@ func (m *Model) buildBlockPickerModal() string {
 		Foreground(ColorPrimary).
 		Render(fmt.Sprintf("📦 ACTIONABLE STEPS & COMMANDS (CARD #%d)", cardNum))
 
+	subText := "Press 1-9 to yank instantly, Enter to copy, s to send, o to open URL/file"
+	if len(m.activeBlocks) > 9 {
+		subText = fmt.Sprintf("Press 1-9 to yank instantly, j/k to navigate (%d items), Enter to copy, s to send, o to open", len(m.activeBlocks))
+	}
 	sub := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Render("Press 1-9 to yank instantly, Enter to copy, s to send, o to open URL/file")
+		Render(subText)
 
 	var b strings.Builder
 	b.WriteString(title + "\n" + sub + "\n\n")
@@ -1388,15 +1392,38 @@ func (m *Model) buildBlockPickerModal() string {
 	if len(m.activeBlocks) == 0 {
 		b.WriteString(lipgloss.NewStyle().Foreground(ColorMuted).Render("No actionable blocks found in this card.\n"))
 	} else {
-		for i, blk := range m.activeBlocks {
-			isSelected := i == m.selectedBlockIdx
-			keyStr := "   "
-			if blk.Key != "" {
-				keyStr = fmt.Sprintf("[%s]", blk.Key)
+		availRows := m.height - 8
+		if availRows < 6 {
+			availRows = 6
+		}
+		startIdx := 0
+		endIdx := len(m.activeBlocks)
+		if len(m.activeBlocks) > availRows {
+			startIdx = m.selectedBlockIdx - availRows/2
+			if startIdx < 0 {
+				startIdx = 0
 			}
-			keyStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorSuccess).Width(5)
+			endIdx = startIdx + availRows
+			if endIdx > len(m.activeBlocks) {
+				endIdx = len(m.activeBlocks)
+				startIdx = endIdx - availRows
+				if startIdx < 0 {
+					startIdx = 0
+				}
+			}
+		}
+
+		for i := startIdx; i < endIdx; i++ {
+			blk := m.activeBlocks[i]
+			isSelected := i == m.selectedBlockIdx
+			keyStr := fmt.Sprintf("[%d]", blk.Index)
+			keyStyle := lipgloss.NewStyle().Bold(true).Width(5)
 			if isSelected {
 				keyStyle = keyStyle.Foreground(ColorPrimary)
+			} else if blk.Index <= 9 {
+				keyStyle = keyStyle.Foreground(ColorSuccess)
+			} else {
+				keyStyle = keyStyle.Foreground(ColorMuted)
 			}
 
 			badgeBg := ColorSecondary
@@ -1824,17 +1851,29 @@ func (m *Model) getLeftColWidth() int {
 // cardTypeBadge returns the rendered badge string for a card.
 // TypeProcedure is the overwhelming default and adds no signal, so it is hidden.
 // Only CMD, DEC, INFO, and INVALID badges are shown.
-func cardTypeBadge(c *card.Card) string {
+func cardTypeBadge(c *card.Card, focused bool) string {
 	if c.Status == card.StatusInvalidated {
-		return BadgeInvalid.Render()
+		if focused {
+			return BadgeInvalid.Render()
+		}
+		return BadgeInvalidUnfocused.Render()
 	}
 	switch c.Type {
 	case card.TypeCommand:
-		return BadgeCmd.Render()
+		if focused {
+			return BadgeCmd.Render()
+		}
+		return BadgeCmdUnfocused.Render()
 	case card.TypeDecision:
-		return BadgeDec.Render()
+		if focused {
+			return BadgeDec.Render()
+		}
+		return BadgeDecUnfocused.Render()
 	case card.TypeInfo:
-		return BadgeInfo.Render()
+		if focused {
+			return BadgeInfo.Render()
+		}
+		return BadgeInfoUnfocused.Render()
 	default:
 		// TypeProcedure and anything else: no badge — silence the noise
 		return ""
@@ -2362,6 +2401,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j":
 				if m.selectedBlockIdx < len(m.activeBlocks)-1 {
 					m.selectedBlockIdx++
+				}
+				return m, nil
+			case "g", "home":
+				m.selectedBlockIdx = 0
+				return m, nil
+			case "G", "end":
+				if len(m.activeBlocks) > 0 {
+					m.selectedBlockIdx = len(m.activeBlocks) - 1
 				}
 				return m, nil
 			case "enter", "c":
@@ -3236,7 +3283,7 @@ func (m *Model) renderDetailFocus(cards []*card.Card) string {
 	}
 	selected := cards[m.selectedIndex]
 
-	badgeStr := cardTypeBadge(selected)
+	badgeStr := cardTypeBadge(selected, true)
 
 	numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%d", selected.Number))
 	verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", selected.Version))
@@ -3328,23 +3375,32 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 		endIdx = len(cards)
 	}
 
+	focused := (m.activePane == PaneCards)
 	visibleCards := cards[m.cardListOffset:endIdx]
 	leftLines := make([]string, 0, len(visibleCards)+1)
 	for idx, c := range visibleCards {
 		i := m.cardListOffset + idx
-		badgeStr := cardTypeBadge(c)
+		badgeStr := cardTypeBadge(c, focused)
 
 		prefix := "  "
 		if i == m.selectedIndex {
 			prefix = "▸ "
 		}
 
-		numStr := BadgeNumberStyle.Render(fmt.Sprintf("#%-2d", c.Number))
+		var numStr string
+		var verStr string
+		if focused {
+			numStr = BadgeNumberStyle.Render(fmt.Sprintf("#%-2d", c.Number))
+			verStr = BadgeVersionStyle.Render(fmt.Sprintf("v%d", c.Version))
+		} else {
+			numStr = BadgeNumberUnfocusedStyle.Render(fmt.Sprintf("#%-2d", c.Number))
+			verStr = BadgeVersionUnfocusedStyle.Render(fmt.Sprintf("v%d", c.Version))
+		}
+
 		pinIcon := ""
 		if c.Pinned {
 			pinIcon = "📌 "
 		}
-		verStr := BadgeVersionStyle.Render(fmt.Sprintf("v%d", c.Version))
 
 		// Calculate available width for the title so the row NEVER wraps
 		badgePadding := 0
@@ -3381,9 +3437,17 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 
 		var renderedRow string
 		if i == m.selectedIndex {
-			renderedRow = CardSelectedStyle.Width(rowWidth).Render(lineContent)
+			if focused {
+				renderedRow = CardSelectedStyle.Width(rowWidth).Render(lineContent)
+			} else {
+				renderedRow = CardSelectedUnfocusedStyle.Width(rowWidth).Render(lineContent)
+			}
 		} else {
-			renderedRow = CardItemStyle.Width(rowWidth).Render(lineContent)
+			if focused {
+				renderedRow = CardItemStyle.Width(rowWidth).Render(lineContent)
+			} else {
+				renderedRow = CardItemUnfocusedStyle.Width(rowWidth).Render(lineContent)
+			}
 		}
 		leftLines = append(leftLines, renderedRow)
 	}
@@ -3429,10 +3493,15 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 
 	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftLines...)
 
+	borderColor := ColorMuted
+	if !focused {
+		borderColor = lipgloss.Color("#3B4252")
+	}
+
 	leftStyle := lipgloss.NewStyle().
 		Width(leftColWidth).
 		Border(lipgloss.NormalBorder(), false, true, false, false).
-		BorderForeground(ColorMuted)
+		BorderForeground(borderColor)
 
 	if m.viewport.Height > 0 {
 		leftStyle = leftStyle.Height(m.viewport.Height)
@@ -3443,14 +3512,6 @@ func (m *Model) renderCardsAndDetail(cards []*card.Card) string {
 
 	renderedLeft := leftStyle.Render(leftPane)
 	renderedRight := rightStyle.Render(m.viewport.View())
-
-	if m.viewMode == ModeSplit {
-		if m.activePane == PaneCards {
-			renderedRight = DimANSI(renderedRight)
-		} else if m.activePane == PanePreview {
-			renderedLeft = DimANSI(renderedLeft)
-		}
-	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, renderedLeft, renderedRight)
 }

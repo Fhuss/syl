@@ -424,9 +424,9 @@ func TestVimPaneFocusDimming(t *testing.T) {
 	}
 
 	viewCardsFocused := m.renderBaseView()
-	// When Cards is in focus, the Preview pane has DimANSI applied (\x1b[2m)
-	if !strings.Contains(viewCardsFocused, "\x1b[2m") {
-		t.Fatalf("expected dimmed escape codes in unfocused preview pane when Cards is active")
+	// When Cards is in focus, Preview is kept at full brightness/color (no faint ANSI dimming)
+	if strings.Contains(viewCardsFocused, "\x1b[2m") {
+		t.Fatalf("expected no faint escape codes when Cards is active (preview stays full brightness)")
 	}
 
 	// Press 'w' to switch focus to Preview pane
@@ -437,9 +437,13 @@ func TestVimPaneFocusDimming(t *testing.T) {
 	}
 
 	viewPreviewFocused := m.renderBaseView()
-	// When Preview is in focus, the Cards pane has DimANSI applied (\x1b[2m)
-	if !strings.Contains(viewPreviewFocused, "\x1b[2m") {
-		t.Fatalf("expected dimmed escape codes in unfocused cards pane when Preview is active")
+	// When Preview is in focus, the Cards pane has its unfocused tint applied and differs from focused
+	if viewCardsFocused == viewPreviewFocused {
+		t.Fatalf("expected view to reflect unfocused card pane tinting when Preview is active")
+	}
+	// Preview pane must still NOT have faint ANSI dimming
+	if strings.Contains(viewPreviewFocused, "\x1b[2m") {
+		t.Fatalf("expected no faint ANSI escape codes when Preview is active")
 	}
 }
 

@@ -1121,6 +1121,60 @@ func TestModelBlockPickerToggle(t *testing.T) {
 	}
 }
 
+func TestModelBlockPickerNumberingPastNine(t *testing.T) {
+	store := card.NewStore()
+	var contentBuilder strings.Builder
+	contentBuilder.WriteString("Deploying infrastructure:\n\n")
+	for i := 1; i <= 14; i++ {
+		contentBuilder.WriteString(fmt.Sprintf("%d. Step number %d: `echo step_%d`\n\n", i, i, i))
+	}
+	store.Add(&card.Card{ID: "c1", Title: "Deployment Steps", Content: contentBuilder.String()})
+
+	m := NewModel(store, reconciler.NewMockReconciler(), nil, nil, nil, false, "test-picker-numbering")
+	m.width = 100
+	m.height = 40
+
+	// Open block picker
+	u, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = u.(*Model)
+
+	if !m.showBlockPicker {
+		t.Fatalf("expected block picker to be open")
+	}
+	if len(m.activeBlocks) != 14 {
+		t.Fatalf("expected 14 active blocks, got %d", len(m.activeBlocks))
+	}
+
+	view := m.View()
+	// Must contain both single digit [1] and double digit [10], [11], [14]
+	if !strings.Contains(view, "[1]") {
+		t.Fatalf("expected view to contain [1], got:\n%s", view)
+	}
+	if !strings.Contains(view, "[9]") {
+		t.Fatalf("expected view to contain [9], got:\n%s", view)
+	}
+	if !strings.Contains(view, "[10]") {
+		t.Fatalf("expected view to contain [10], got:\n%s", view)
+	}
+	if !strings.Contains(view, "[14]") {
+		t.Fatalf("expected view to contain [14], got:\n%s", view)
+	}
+
+	// Test 'G' jump to bottom
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = u.(*Model)
+	if m.selectedBlockIdx != 13 {
+		t.Fatalf("expected selectedBlockIdx to be 13 after 'G', got %d", m.selectedBlockIdx)
+	}
+
+	// Test 'g' jump to top
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = u.(*Model)
+	if m.selectedBlockIdx != 0 {
+		t.Fatalf("expected selectedBlockIdx to be 0 after 'g', got %d", m.selectedBlockIdx)
+	}
+}
+
 func TestModelSearchMode(t *testing.T) {
 	store := card.NewStore()
 	store.Add(&card.Card{ID: "c1", Title: "PostgreSQL Database", Content: "postgres config"})
