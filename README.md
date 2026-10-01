@@ -211,6 +211,7 @@ Press `?` inside `syl` anytime to open the interactive help glossary.
 | `u` | Open card URL directly in browser |
 | `/` | Quick search & filter cards interactively |
 | `S` | Switch active conversation session without quitting |
+| `N` / `Ctrl+n` | Clear pane and wait for new conversation (auto-attaches upon prompt) |
 | `R` | Retry failed card capture (later turns wait until it succeeds) |
 | `c` | Copy code snippet(s) from card to clipboard |
 | `C` / `y` | Copy full card markdown to clipboard |
@@ -238,6 +239,13 @@ When installed into your assistant environment (e.g. Antigravity, Claude Code), 
 
 ---
 
+## Contributing
+
+Contributions, bug reports, and ideas are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and pull request guidelines.
+
+---
+
 ## License
 
 MIT
+
