@@ -26,7 +26,7 @@ type Target struct {
 	Surface     string // surface or pane identifier
 }
 
-// DiscoverPeer attempts to find an adjacent chat terminal in cmux, tmux, or defaults to clipboard.
+// DiscoverPeer attempts to find an adjacent chat terminal in Herdr, cmux or tmux, or defaults to clipboard.
 func DiscoverPeer(overrideTarget string) Target {
 	if overrideTarget != "" {
 		if strings.HasPrefix(overrideTarget, "surface:") {
@@ -35,6 +35,14 @@ func DiscoverPeer(overrideTarget string) Target {
 		if strings.HasPrefix(overrideTarget, "%") {
 			return Target{Type: "tmux", Description: overrideTarget, Surface: overrideTarget}
 		}
+	}
+
+	// Herdr owns the inner layout even when its client runs inside Ghostty/cmux.
+	if HerdrAvailable() {
+		if peer, err := HerdrPeer(); err == nil && peer.PaneID != "" {
+			return Target{Type: "herdr", Description: "herdr " + peer.PaneID, Surface: peer.PaneID}
+		}
+		return Target{Type: "clipboard", Description: "system clipboard"}
 	}
 
 	// 1. Try cmux
@@ -74,6 +82,12 @@ func Send(text string, overrideTarget string) (string, error) {
 	target := DiscoverPeer(overrideTarget)
 
 	switch target.Type {
+	case "herdr":
+		var result json.RawMessage
+		if err := HerdrCall(&result, "pane", "send-text", target.Surface, text); err == nil {
+			return fmt.Sprintf("✓ Sent to %s (+ copied)", target.Description), nil
+		}
+		// If Herdr failed, leave the reference on the clipboard.
 	case "cmux":
 		setCmd := exec.Command("cmux", "set-buffer", "--name", "default", "--", text)
 		pasteCmd := exec.Command("cmux", "paste-buffer", "--surface", target.Surface)
@@ -218,9 +232,12 @@ func ParseCmuxResumeSession(data []byte) string {
 	return path
 }
 
-// PeerSessionFile finds the exact session bound to the adjacent Pi surface,
-// when cmux has recorded a restore checkpoint for that surface.
+// PeerSessionFile finds the exact session bound to the adjacent agent pane.
+// Herdr reports the live agent session; cmux may have a Pi restore checkpoint.
 func PeerSessionFile() string {
+	if HerdrAvailable() {
+		return HerdrPeerSessionFile()
+	}
 	peer, ok := findCmuxPeer()
 	if !ok {
 		return ""
@@ -350,9 +367,15 @@ func ParseTmuxAgent(output string, currentPane string) string {
 	return ""
 }
 
-// DetectPeerAgent inspects adjacent multiplexer panels (cmux or tmux) to identify
+// DetectPeerAgent inspects adjacent multiplexer panes to identify
 // which AI assistant (e.g. "antigravity", "claude", "pi") is running alongside syl.
 func DetectPeerAgent() string {
+	if HerdrAvailable() {
+		if peer, err := HerdrPeer(); err == nil {
+			return peer.Agent
+		}
+		return ""
+	}
 	// 1. Check cmux
 	if _, err := exec.LookPath("cmux"); err == nil {
 		if out, err := exec.Command("cmux", "list-panels").Output(); err == nil {
@@ -418,9 +441,18 @@ func ParseTmuxPeerCWD(output string, peerPane string) string {
 	return ""
 }
 
-// DetectPeerCWD inspects adjacent multiplexer panels (cmux or tmux) to identify
+// DetectPeerCWD inspects adjacent multiplexer panes to identify
 // the current working directory of the terminal running alongside syl.
 func DetectPeerCWD() string {
+	if HerdrAvailable() {
+		if peer, err := HerdrPeer(); err == nil {
+			if peer.ForegroundCWD != "" {
+				return peer.ForegroundCWD
+			}
+			return peer.CWD
+		}
+		return ""
+	}
 	// 1. Check cmux
 	if _, err := exec.LookPath("cmux"); err == nil {
 		if peer, ok := findCmuxPeer(); ok {
@@ -447,4 +479,3 @@ func DetectPeerCWD() string {
 
 	return ""
 }
-

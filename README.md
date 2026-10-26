@@ -15,7 +15,7 @@
 
 ---
 
-`syl` is a terminal companion that sits quietly beside your AI coding assistant (in `cmux`, `tmux`, or split terminal panes). It passively observes completed conversation turns and extracts, structures, and continuously maintains **procedures, runnable commands, architecture decisions, and open questions** — persisted across restarts.
+`syl` is a terminal companion that sits quietly beside your AI coding assistant (in Herdr, `cmux`, `tmux`, or split terminal panes). It passively observes completed conversation turns and extracts, structures, and continuously maintains **procedures, runnable commands, architecture decisions, and open questions** — persisted across restarts.
 
 ```
 ┌───────────────────────────────────────┬────────────────────────────────────────────────────────┐
@@ -53,7 +53,7 @@ Conversational scrollback causes **procedural decay**. `syl` solves this by keep
 When a follow-up answer fixes an error or updates a flag, `syl` patches the existing reference card in-place and increments its revision (`v1` → `v2` → `v3`). Disproven steps are marked invalidated rather than cluttering your screen with duplicate cards.
 
 ### Adjacent Workspace Awareness & Auto-Attach
-When launched in an adjacent terminal (via `cmux` or `tmux`), `syl` automatically detects the peer pane's working directory. It connects directly to conversations in that workspace without confusing unrelated projects.
+When launched beside an agent in Herdr, `cmux`, or `tmux`, `syl` detects the peer's working directory. In Herdr it also reads the adjacent agent's exact transcript path, so other conversations in the same project cannot take over. Put one Syl pane in each Herdr workspace: switching workspaces moves the agent and companion together.
 
 ### Waiting for Conversation Mode (`syl -n` / `N`)
 Start a brand new session anytime by running `syl -n` or pressing **`N`** inside the TUI. `syl` clears the reference pane and displays a listening companion banner. As soon as you type your first prompt in the adjacent terminal, `syl` automatically detects the conversation and begins streaming cards.
@@ -134,15 +134,17 @@ syl install-skill
 *Supports Antigravity, Claude Code, and Pi Agent.*
 
 ### 2. Launching Syl
-Open a split pane adjacent to your AI terminal and run:
+From the agent's terminal in Herdr, run `syl launch` (or ask an agent with the companion skill to **"start Syl"**):
 
 ```bash
-# Auto-detects adjacent workspace and resumes where you were
-syl
-
-# Or start fresh: clear pane and wait for your next prompt
-syl --new
+syl launch
 ```
+
+This creates a right-hand pane *inside the current Herdr tab*, without taking focus. It attaches to the agent's current transcript; if there is no agent transcript yet, it waits for a new conversation. Running it again in that tab reuses the existing Syl pane. Run it once in each workspace where you want a companion. `syl launch --check` checks only that tab, and `--force` deliberately creates another pane.
+
+The skill is optional: it tells your AI assistant when and how to run `syl launch`, but does not itself follow Herdr workspace switches. After starting a **new agent conversation in the same pane**, press `N` in Syl to wait for its next prompt; `S` opens Syl's manual session switcher. An outer Ghostty split stays fixed when Herdr switches workspaces, so launch from inside Herdr for this setup.
+
+Outside Herdr, `syl launch` uses the supported terminal split. You can also open a split yourself and run `syl` to auto-detect the adjacent session, or `syl --new` to wait for a new one.
 
 ### 3. Interactive Feature Tour (Demo Mode)
 Explore live card mutation, checklist toggles, and shortcuts without needing an active agent:
@@ -164,7 +166,7 @@ Commands:
   demo               Run interactive simulation demonstrating live card mutation
   sessions           List active and recent conversation sessions to choose from
   install-skill      Install companion skill into Pi Agent, Claude Code, or Antigravity
-  launch / start     Launch Syl in an adjacent right-hand split (cmux/tmux)
+  launch / start     Launch Syl in an adjacent right-hand split (Herdr/cmux/tmux)
   init-config        Generate default config file in ~/.config/syl/config.yaml
   version            Print version information
 
@@ -198,7 +200,7 @@ Press **`?`** inside `syl` anytime to open the interactive help glossary.
 | `n` / `N` | Jump to next / previous search match in preview buffer |
 | `N` / `Ctrl+n` | Clear pane and wait for new conversation (auto-attaches upon prompt) |
 | `b` | Surgical block & step picker (yank `1`–`9`, run `s`, open URL/file `o`) |
-| `s` | Send card reference or block to peer terminal (`cmux`, `tmux`, clipboard) |
+| `s` | Send card reference or block to peer terminal (Herdr, `cmux`, `tmux`, clipboard) |
 | `v` / `E` | Open active card in `$EDITOR` (`nvim`/`vim`), reloading changes on exit |
 | `za` / `Z` | Fold / unfold fenced code blocks |
 | `␣` (`Space`) | Toggle markdown checklist item (`- [ ]` → `- [x]`) |
