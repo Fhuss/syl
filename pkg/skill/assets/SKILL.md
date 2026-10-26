@@ -1,6 +1,6 @@
 ---
 name: syl-companion
-description: "Companion skill for Syl (live reference pane). Automatically initializes Syl in an adjacent split pane to the right, formats actionable steps/code/files for Syl, handles [Ref: ...] card context, and manages companion terminal setups across cmux, tmux, iTerm2, and macOS Terminal."
+description: "Companion skill for Syl (live reference pane). Initializes Syl beside the current agent in Herdr, cmux, or tmux, formats actionable steps/code/files, and handles [Ref: ...] card context."
 risk: safe
 source: local
 ---
@@ -13,18 +13,15 @@ This skill guides the AI assistant in collaborating symbiotically with **Syl**, 
 
 ## 1. Automated Initialization (Launch Syl to the Right)
 
-When the user asks to start, initialize, or launch Syl (e.g. *"init syl"*, *"launch syl"*, *"open syl pane"*, or on session startup):
-
-### One-Command Automated Setup:
-Execute `syl launch` via `run_command` (or terminal):
+When the user asks to start, initialize, or launch Syl (e.g. *"init syl"*, *"launch syl"*, *"open syl pane"*), run `syl launch` from the current agent terminal. Do not auto-launch on every session startup without a request.
 
 ```bash
-# Check if Syl is already running or launch it in a right split:
 syl launch
-
-# Or check if Syl is already active:
-syl launch --check
 ```
+
+`--check` checks the current Herdr tab without creating a pane; `--force` adds another Syl pane deliberately. When launched from a Herdr pane, Syl splits **inside that tab**, alongside the agent, and attaches to its current transcript. Each Herdr workspace needs its own companion pane; switching workspaces then switches both panes together. Without an existing agent transcript Syl waits for a new conversation. Do not launch from an unrelated Ghostty split or from outside the target Herdr pane.
+
+For a *new Pi conversation within the same pane*, press `N` in Syl to clear its cards and wait for the next prompt. `S` switches Syl manually to a prior conversation. The skill teaches the agent this workflow; `syl launch` is the actual entry point and works without the skill.
 
 ---
 

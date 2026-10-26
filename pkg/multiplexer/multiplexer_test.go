@@ -87,6 +87,7 @@ func TestParseCmuxResumeSession(t *testing.T) {
 }
 
 func TestPeerSessionFile(t *testing.T) {
+	t.Setenv("HERDR_ENV", "")
 	dir := t.TempDir()
 	cmux := filepath.Join(dir, "cmux")
 	script := `#!/bin/sh
@@ -129,6 +130,7 @@ func TestParseTmuxPanes(t *testing.T) {
 
 func TestDiscoverPeerFallback(t *testing.T) {
 	// With empty target and simulated non-multiplexer env
+	t.Setenv("HERDR_ENV", "")
 	t.Setenv("TMUX", "")
 	t.Setenv("CMUX_SURFACE_ID", "")
 	t.Setenv("CMUX_WORKSPACE_ID", "")
@@ -208,4 +210,3 @@ func TestParseTmuxPeerCWD(t *testing.T) {
 		t.Errorf("expected empty string for non-existent pane, got %q", cwdMissing)
 	}
 }
-

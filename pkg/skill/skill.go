@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/Fhuss/syl/pkg/multiplexer"
 )
 
 //go:embed assets/SKILL.md
@@ -112,6 +114,9 @@ func writeSkillFiles(destDir string) error {
 
 // Launch runs the embedded companion init script to split terminal and launch Syl.
 func Launch(force bool, check bool) error {
+	if multiplexer.HerdrAvailable() {
+		return launchHerdr(force, check)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = os.Getenv("HOME")

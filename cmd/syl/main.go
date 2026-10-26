@@ -37,7 +37,7 @@ Commands:
   demo               Run an interactive simulation demonstrating live card mutation
   sessions           List active and recent conversation sessions to choose from
   install-skill      Install companion skill into Pi Agent, Claude Code, or Antigravity
-  launch / start     Launch Syl in an adjacent right-hand split (cmux/tmux/terminal)
+  launch / start     Launch Syl in an adjacent right-hand split (Herdr/cmux/tmux/terminal)
   init-config        Generate a default configuration file in ~/.config/syl/config.yaml
   version            Print version information
 
@@ -240,14 +240,14 @@ Keys in TUI:
 	var detectedAgent string
 	var searchCWD string
 	if !isDemo {
-		// Detect peer CWD from adjacent terminal (cmux/tmux) or fallback to current dir
+		// Detect peer CWD from the adjacent terminal or fallback to current dir
 		if peerCWD := multiplexer.DetectPeerCWD(); peerCWD != "" {
 			searchCWD = peerCWD
 		} else {
 			searchCWD, _ = os.Getwd()
 		}
 
-		// Detect peer agent from adjacent terminal (cmux/tmux)
+		// Detect peer agent from the adjacent terminal
 		if peer := multiplexer.DetectPeerAgent(); peer != "" {
 			detectedAgent = peer
 		}
@@ -299,7 +299,7 @@ Keys in TUI:
 			}
 		}
 
-		// Fall back to checking adjacent terminal in cmux or tmux if agent is still unknown
+		// Fall back to checking the adjacent terminal if agent is still unknown
 		if detectedAgent == "" || detectedAgent == "unknown" || detectedAgent == "file" {
 			if peer := multiplexer.DetectPeerAgent(); peer != "" {
 				detectedAgent = peer
