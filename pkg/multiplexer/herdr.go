@@ -27,18 +27,33 @@ func HerdrAvailable() bool {
 	return os.Getenv("HERDR_ENV") == "1" && os.Getenv("HERDR_PANE_ID") != ""
 }
 
-// HerdrCall runs a Herdr CLI command and decodes its JSON result.
-func HerdrCall(result any, args ...string) error {
+func herdrOutput(args ...string) ([]byte, error) {
 	binary := os.Getenv("HERDR_BIN_PATH")
 	if binary == "" {
 		binary = "herdr"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
-	out, err := cmd.Output()
+	out, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("herdr %s: %w", strings.Join(args, " "), err)
+		// Do not include a pane's submitted command or chat text in errors.
+		return nil, fmt.Errorf("herdr %s: %w: %s", strings.Join(args[:min(2, len(args))], " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// HerdrExec accepts successful commands that print no JSON, such as pane run
+// and pane send-text. A successful exit confirms only queue admission.
+func HerdrExec(args ...string) error {
+	_, err := herdrOutput(args...)
+	return err
+}
+
+// HerdrCall runs a Herdr CLI command and decodes its JSON result.
+func HerdrCall(result any, args ...string) error {
+	out, err := herdrOutput(args...)
+	if err != nil {
+		return err
 	}
 	var response struct {
 		Result json.RawMessage `json:"result"`
