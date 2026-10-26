@@ -83,8 +83,7 @@ func Send(text string, overrideTarget string) (string, error) {
 
 	switch target.Type {
 	case "herdr":
-		var result json.RawMessage
-		if err := HerdrCall(&result, "pane", "send-text", target.Surface, text); err == nil {
+		if err := HerdrExec("pane", "send-text", target.Surface, text); err == nil {
 			return fmt.Sprintf("✓ Sent to %s (+ copied)", target.Description), nil
 		}
 		// If Herdr failed, leave the reference on the clipboard.

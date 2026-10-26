@@ -18,7 +18,7 @@ case "$1 $2" in
   'pane layout') printf '%s\n' '{"result":{"layout":{"panes":[{"pane_id":"wA:p1"},{"pane_id":"wA:p2"}]}}}' ;;
   'pane process-info') printf '%s\n' "{\"result\":{\"process_info\":{\"foreground_processes\":$TEST_PROCESSES}}}" ;;
   'pane split') printf '%s\n' '{"result":{"pane":{"pane_id":"wA:p3"}}}' ;;
-  'pane run') printf '%s\n' '{"result":{"type":"pane_run"}}' ;;
+  'pane run') : ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {

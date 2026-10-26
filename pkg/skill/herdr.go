@@ -1,7 +1,6 @@
 package skill
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,8 +67,7 @@ func launchHerdr(force, check bool) error {
 	if pane.AgentSession.Kind != "path" || pane.AgentSession.Value == "" {
 		command += " --new"
 	}
-	var run json.RawMessage
-	if err := multiplexer.HerdrCall(&run, "pane", "run", split.Pane.PaneID, command); err != nil {
+	if err := multiplexer.HerdrExec("pane", "run", split.Pane.PaneID, command); err != nil {
 		return fmt.Errorf("created Herdr pane %s but could not start Syl: %w", split.Pane.PaneID, err)
 	}
 	fmt.Printf("✓ Launched Syl in Herdr pane %s beside %s.\n", split.Pane.PaneID, current)

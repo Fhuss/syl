@@ -23,7 +23,7 @@ case "$1 $2" in
       w1:p3) printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p3","agent":"claude","cwd":"/tmp/other"}}}' ;;
     esac ;;
   'pane process-info') printf '%s\n' '{"result":{"process_info":{"foreground_processes":[]}}}' ;;
-  'pane send-text') printf '%s\n' '{"result":{"type":"pane_send_text"}}' ;;
+  'pane send-text') if [ "$TEST_HERDR_FAIL" = 1 ]; then echo 'rejected' >&2; exit 1; fi ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -62,6 +62,21 @@ func TestHerdrAdjacentAgent(t *testing.T) {
 	t.Setenv("TEST_HERDR_NEIGHBOR", "w1:p1")
 	if got := HerdrPeerSessionFile(); got != "/tmp/current.jsonl" {
 		t.Fatalf("adjacent agent session: %q", got)
+	}
+}
+
+func TestHerdrExecAcceptsEmptySuccessAndReportsFailure(t *testing.T) {
+	log := fakeHerdr(t)
+	if err := HerdrExec("pane", "send-text", "w1:p1", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "pane send-text w1:p1 hello") {
+		t.Fatalf("command not sent: %s", calls)
+	}
+	t.Setenv("TEST_HERDR_FAIL", "1")
+	if err := HerdrExec("pane", "send-text", "w1:p1", "private text"); err == nil || strings.Contains(err.Error(), "private text") {
+		t.Fatalf("expected safe error, got %v", err)
 	}
 }
 
